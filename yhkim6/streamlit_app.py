@@ -22,7 +22,7 @@ modules_loaded = False
 
 # 수정된 db_utils.py에서 필요한 모듈을 import 합니다.
 try:
-    from db.db_utils import show_csv_uploaders
+    from db.db_utils import load_all_data
     from services.analysis_service import analyze_data
     from utils.ui_helpers import display_analysis_result, display_data_views
     modules_loaded = True
@@ -87,17 +87,18 @@ def main():
     if not modules_loaded:
         st.stop()
 
-    uploaded_files = show_csv_uploaders()
+    # show_csv_uploaders() 대신 load_all_data()를 호출
+    uploaded_files = load_all_data()
     
     tab_keys = ['pcb', 'fw', 'rftx', 'semi', 'func']
     
-    if not all(key in uploaded_files for key in tab_keys):
-        st.info("⬆️ 모든 분석을 시작하려면 5개의 파일을 모두 업로드해주세요.")
-        return # st.stop() 대신 return 사용
+    # load_all_data()에서 에러가 발생하면 None을 반환하므로 이를 체크
+    if uploaded_files is None:
+        st.stop()
 
     st.success("✅ 모든 파일 로드 성공!")
 
-    # 모든 파일이 업로드된 후에 tab_info를 생성합니다.
+    # 모든 파일이 로드된 후에 tab_info를 생성합니다.
     tab_info = {
         'pcb': {'header': "파일 PCB (Pcb_Process)", 'date_col': 'PcbStartTime_dt', 'data': uploaded_files['pcb']},
         'fw': {'header': "파일 Fw (Fw_Process)", 'date_col': 'FwStamp_dt', 'data': uploaded_files['fw']},
