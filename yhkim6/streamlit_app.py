@@ -4,7 +4,7 @@ from datetime import datetime, date
 import warnings
 import sys
 import os
-#
+
 # 현재 파일의 절대 경로를 기준으로 프로젝트 루트 디렉토리를 찾습니다.
 project_root = os.path.dirname(os.path.abspath(__file__))
 
@@ -20,9 +20,9 @@ if project_root not in sys.path:
 # 에러 처리를 위한 플래그
 modules_loaded = False
 
-# 프로젝트 내부 모듈을 import 합니다.
+# 수정된 db_utils.py에서 필요한 모듈을 import 합니다.
 try:
-    from db.db_utils import get_connection, read_data_from_db
+    from db.db_utils import show_csv_uploaders
     from services.analysis_service import analyze_data
     from utils.ui_helpers import display_analysis_result, display_data_views
     modules_loaded = True
@@ -87,69 +87,65 @@ def main():
     if not modules_loaded:
         st.stop()
 
-    st.info("🔄 데이터베이스 연결을 시도합니다...")
-    conn = get_connection()
-    if conn is None:
-        st.error("❌ 데이터베이스 연결에 실패했습니다. 앱을 중단합니다.")
-        st.stop()
-
-    st.success("✅ 데이터베이스 연결 성공!")
+    # 5개의 CSV 파일을 업로드하는 위젯을 표시하고 DataFrame 딕셔너리를 받습니다.
+    uploaded_files = show_csv_uploaders()
     
-    st.info("🔄 데이터를 불러오고 있습니다...")
-    try:
-        df_all_data = read_data_from_db(conn, 'historyinspection')
-        if df_all_data is None or df_all_data.empty:
-            st.error("❌ 'historyinspection' 테이블에서 데이터를 불러오지 못했습니다.")
-            st.stop()
-        st.success(f"✅ 'historyinspection' 테이블 로드 완료! (총 {len(df_all_data):,}개 레코드)")
-    except Exception as e:
-        st.error(f"❌ 데이터베이스 조회 중 오류: {e}")
+    tab_keys = ['pcb', 'fw', 'rftx', 'semi', 'func']
+    
+    # 모든 파일이 업로드되었는지 확인합니다.
+    if not all(key in uploaded_files for key in tab_keys):
+        st.info("⬆️ 모든 분석을 시작하려면 5개의 파일을 모두 업로드해주세요.")
         st.stop()
 
-    st.info("🔄 날짜 컬럼을 변환하고 있습니다...")
-    try:
-        df_all_data['PcbStartTime_dt'] = pd.to_datetime(df_all_data['PcbStartTime'], errors='coerce')
-        df_all_data['FwStamp_dt'] = pd.to_datetime(df_all_data['FwStamp'], errors='coerce')
-        df_all_data['RfTxStamp_dt'] = pd.to_datetime(df_all_data['RfTxStamp'], errors='coerce')
-        df_all_data['SemiAssyStartTime_dt'] = pd.to_datetime(df_all_data['SemiAssyStartTime'], errors='coerce')
-        df_all_data['BatadcStamp_dt'] = pd.to_datetime(df_all_data['BatadcStamp'], errors='coerce')
-        st.success("✅ 날짜 컬럼 변환 완료")
-    except KeyError as e:
-        st.error(f"❌ 날짜 컬럼을 찾을 수 없습니다: {e}")
-        st.info("데이터베이스의 실제 컬럼명을 확인하고 코드를 수정해주세요.")
-        st.write("현재 데이터베이스 컬럼:", list(df_all_data.columns))
-        st.stop()
+    st.success("✅ 모든 파일 로드 성공!")
 
+    # 각 탭의 정보를 정의하고, 날짜 컬럼을 변환합니다.
     tab_info = {
-        'pcb': {'header': "파일 PCB (Pcb_Process)", 'date_col': 'PcbStartTime_dt'},
-        'fw': {'header': "파일 Fw (Fw_Process)", 'date_col': 'FwStamp_dt'},
-        'rftx': {'header': "파일 RfTx (RfTx_Process)", 'date_col': 'RfTxStamp_dt'},
-        'semi': {'header': "파일 Semi (SemiAssy_Process)", 'date_col': 'SemiAssyStartTime_dt'},
-        'func': {'header': "파일 Func (Func_Process)", 'date_col': 'BatadcStamp_dt'}
+        'pcb': {'header': "파일 PCB (Pcb_Process)", 'date_col': 'PcbStartTime_dt', 'data': uploaded_files['pcb']},
+        'fw': {'header': "파일 Fw (Fw_Process)", 'date_col': 'FwStamp_dt', 'data': uploaded_files['fw']},
+        'rftx': {'header': "파일 RfTx (RfTx_Process)", 'date_col': 'RfTxStamp_dt', 'data': uploaded_files['rftx']},
+        'semi': {'header': "파일 Semi (SemiAssy_Process)", 'date_col': 'SemiAssyStartTime_dt', 'data': uploaded_files['semi']},
+        'func': {'header': "파일 Func (Func_Process)", 'date_col': 'BatadcStamp_dt', 'data': uploaded_files['func']}
     }
 
-    tabs = st.tabs(list(tab_info.keys()))
+    # 각 DataFrame에 대해 날짜 컬럼을 변환합니다.
+    for key in tab_keys:
+        df_tab = tab_info[key]['data']
+        date_col_name = tab_info[key]['date_col'].replace('_dt', '')
+        
+        try:
+            df_tab[tab_info[key]['date_col']] = pd.to_datetime(df_tab[date_col_name], errors='coerce')
+        except KeyError as e:
+            st.error(f"❌ {key.upper()} 데이터에서 날짜 컬럼 '{date_col_name}'을 찾을 수 없습니다.")
+            st.write(f"현재 {key.upper()} 데이터 컬럼:", list(df_tab.columns))
+            st.stop()
+        
+    st.success("✅ 모든 날짜 컬럼 변환 완료")
+
+    tabs = st.tabs(tab_keys)
 
     for i, tab_key in enumerate(tab_info.keys()):
         with tabs[i]:
             st.header(tab_info[tab_key]['header'])
+            df_current_tab = tab_info[tab_key]['data']
+
+            if df_current_tab.empty:
+                st.warning("⚠️ 업로드된 파일에 데이터가 없습니다. 다른 파일을 선택해주세요.")
+                continue
 
             try:
                 jig_col_name = st.session_state.jig_col_mapping[tab_key]
-                if jig_col_name not in df_all_data.columns:
+                if jig_col_name not in df_current_tab.columns:
                     st.warning(f"⚠️ '{jig_col_name}' 컬럼을 찾을 수 없습니다. 'SNumber'를 사용합니다.")
                     jig_col_name = 'SNumber'
                 
-                unique_jigs = df_all_data[jig_col_name].dropna().unique()
+                unique_jigs = df_current_tab[jig_col_name].dropna().unique()
                 pc_options = ['모든 PC'] + sorted(list(unique_jigs))
                 selected_jig = st.selectbox("PC (Jig) 선택", pc_options, key=f"pc_select_{tab_key}")
 
                 date_col = tab_info[tab_key]['date_col']
-                if date_col not in df_all_data.columns:
-                    st.error(f"❌ 날짜 컬럼 '{date_col}'을 찾을 수 없습니다.")
-                    continue
                 
-                df_dates = df_all_data[date_col].dt.date.dropna()
+                df_dates = df_current_tab[date_col].dt.date.dropna()
                 if not df_dates.empty:
                     min_date = df_dates.min()
                     max_date = df_dates.max()
@@ -162,9 +158,9 @@ def main():
                     with st.spinner("데이터 분석 및 저장 중..."):
                         if len(selected_dates) == 2:
                             start_date, end_date = selected_dates
-                            df_filtered = df_all_data[
-                                (df_all_data[date_col].dt.date >= start_date) &
-                                (df_all_data[date_col].dt.date <= end_date)
+                            df_filtered = df_current_tab[
+                                (df_current_tab[date_col].dt.date >= start_date) &
+                                (df_current_tab[date_col].dt.date <= end_date)
                             ].copy()
                             if selected_jig != '모든 PC':
                                 df_filtered = df_filtered[df_filtered[jig_col_name] == selected_jig].copy()
@@ -185,7 +181,7 @@ def main():
                 
                 st.markdown("---")
                 st.markdown(f"#### {tab_info[tab_key]['header'].split()[1]} 데이터 조회")
-                display_data_views(tab_key, df_all_data)
+                display_data_views(tab_key, df_current_tab)
                 
             except Exception as e:
                 st.error(f"❌ 탭 '{tab_key}' 처리 중 오류: {e}")
