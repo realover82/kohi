@@ -1,1 +1,2 @@
 *.sqlite3 filter=lfs diff=lfs merge=lfs -text
+yhkim6/src/db/SJ_TM2360E.sqlite3 filter=lfs diff=lfs merge=lfs -text
