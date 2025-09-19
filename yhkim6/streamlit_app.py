@@ -50,8 +50,8 @@ def initialize_session_state():
             'pcb': 'PcbMaxIrPwr',
             'fw': 'FwPC',
             'rftx': 'RfTxPC',
-            'semi': 'SemiAssyPC',
-            'func': 'FwPC',
+            'semi': 'SemiAssyMaxBatVolt',
+            'func': 'BatadcPC',
         }
     if 'show_line_chart' not in st.session_state:
         st.session_state.show_line_chart = {}
@@ -93,7 +93,7 @@ def main():
     
     if not all(key in uploaded_files for key in tab_keys):
         st.info("⬆️ 모든 분석을 시작하려면 5개의 파일을 모두 업로드해주세요.")
-        st.stop()
+        return # st.stop() 대신 return 사용
 
     st.success("✅ 모든 파일 로드 성공!")
 
