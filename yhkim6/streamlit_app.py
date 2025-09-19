@@ -87,19 +87,17 @@ def main():
     if not modules_loaded:
         st.stop()
 
-    # 5개의 CSV 파일을 업로드하는 위젯을 표시하고 DataFrame 딕셔너리를 받습니다.
     uploaded_files = show_csv_uploaders()
     
     tab_keys = ['pcb', 'fw', 'rftx', 'semi', 'func']
     
-    # 모든 파일이 업로드되었는지 확인합니다.
     if not all(key in uploaded_files for key in tab_keys):
         st.info("⬆️ 모든 분석을 시작하려면 5개의 파일을 모두 업로드해주세요.")
         st.stop()
 
     st.success("✅ 모든 파일 로드 성공!")
 
-    # 각 탭의 정보를 정의하고, 날짜 컬럼을 변환합니다.
+    # 모든 파일이 업로드된 후에 tab_info를 생성합니다.
     tab_info = {
         'pcb': {'header': "파일 PCB (Pcb_Process)", 'date_col': 'PcbStartTime_dt', 'data': uploaded_files['pcb']},
         'fw': {'header': "파일 Fw (Fw_Process)", 'date_col': 'FwStamp_dt', 'data': uploaded_files['fw']},
