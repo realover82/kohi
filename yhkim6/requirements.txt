@@ -12,3 +12,4 @@ Pillow
 scikit-learn
 seaborn
 opencv-python
+opencv-contrib-python
