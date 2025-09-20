@@ -174,7 +174,27 @@ if model_choice == "YOLOv5 (예정)":
     st.sidebar.warning("YOLOv5는 현재 더미 모델로 구현되어 있으며, 실제 기능은 없습니다.")
 
 load_mode = st.sidebar.radio("모델 가중치 로드", ("파인튜닝", "무작위 초기화"))
+
+# 파인튜닝 레이어 설정 목록 버튼
+st.sidebar.header("파인튜닝 설정")
 finetune_layer = st.sidebar.selectbox("파인튜닝 레이어 선택", ("마지막 레이어만", "모든 레이어"))
+if st.sidebar.button("파인튜닝 설정 적용"):
+    if st.session_state['model'] is None:
+        st.warning("먼저 모델을 로드하거나 초기화해주세요.")
+    else:
+        try:
+            if finetune_layer == "마지막 레이어만":
+                for name, param in st.session_state['model'].named_parameters():
+                    if 'fc' in name:
+                        param.requires_grad = True
+                    else:
+                        param.requires_grad = False
+            elif finetune_layer == "모든 레이어":
+                for param in st.session_state['model'].parameters():
+                    param.requires_grad = True
+            st.success("파인튜닝 레이어 설정이 적용되었습니다.")
+        except Exception as e:
+            st.error(f"파인튜닝 설정 적용 중 오류 발생: {e}")
 
 st.sidebar.text("")
 
@@ -202,6 +222,18 @@ if load_mode == "파인튜닝":
         with open(best_pth_path, "wb") as f:
             f.write(uploaded_best_pth.getbuffer())
         st.success("best.pth 파일 업로드 완료.")
+        
+# 모델 초기화/로드
+if st.session_state['model'] is None:
+    model_instance = AngleHead(pretrained=False).to(device)
+    if load_mode == "파인튜닝" and os.path.isfile(os.path.join(CKPT_DIR_ZERO, "best.pth")):
+        model_instance.load_state_dict(torch.load(os.path.join(CKPT_DIR_ZERO, "best.pth"), map_location=device))
+        st.info("파인튜닝 모드: 기존 best.pth 가중치를 로드했습니다.")
+    elif load_mode == "파인튜닝":
+        st.error("파인튜닝 모드입니다. best.pth 파일을 먼저 업로드해야 합니다.")
+    else:
+        st.info("무작위 초기화 모드: 새로운 모델을 초기화했습니다.")
+    st.session_state['model'] = model_instance
 
 # =========================================================
 # 기능 버튼 (수직 나열)
@@ -212,54 +244,26 @@ st.header("🚀 성능 테스트 실행")
 if st.button("모델 구조 보기"):
     st.info("모델 구조를 분석 중입니다...")
     try:
-        if st.session_state['model'] is None:
-            model_to_view = AngleHead(pretrained=False).to(device)
-            if load_mode == "파인튜닝" and os.path.isfile(os.path.join(CKPT_DIR_ZERO, "best.pth")):
-                model_to_view.load_state_dict(torch.load(os.path.join(CKPT_DIR_ZERO, "best.pth"), map_location=device))
-        else:
-            model_to_view = st.session_state['model']
-
         buffer = io.StringIO()
         with redirect_stdout(buffer):
-            summary(model_to_view, (3, 224, 224), device=str(device))
-        
+            summary(st.session_state['model'], (3, 224, 224), device=str(device))
         st.subheader("모델 구조 상세")
         st.code(buffer.getvalue())
-        
     except Exception as e:
         st.error(f"모델 구조 분석 중 오류 발생: {e}")
 
-# 파인튜닝 레이어 설정 적용 버튼 (재학습 기능은 현재 없음)
-if st.button("파인튜닝 레이어 설정 적용"):
-    st.info("모델의 파인튜닝 레이어 설정을 적용합니다. 이 설정은 '분석 시작' 버튼에 반영됩니다.")
-    
-    try:
-        model = AngleHead(pretrained=False).to(device)
-        if load_mode == "파인튜닝" and os.path.isfile(os.path.join(CKPT_DIR_ZERO, "best.pth")):
-            model.load_state_dict(torch.load(os.path.join(CKPT_DIR_ZERO, "best.pth"), map_location=device))
-            st.success("파인튜닝 모드: 기존 best.pth 가중치를 로드했습니다.")
-        elif load_mode == "무작위 초기화":
-            st.warning("무작위 초기화 모드로 설정되었습니다.")
-        
-        if finetune_layer == "마지막 레이어만":
-            for name, param in model.named_parameters():
-                if 'fc' in name:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False
-        elif finetune_layer == "모든 레이어":
-            for param in model.parameters():
-                param.requires_grad = True
-            
-        st.session_state['model'] = model
-        st.subheader("파인튜닝 설정 적용 결과")
-        st.write("다음 레이어가 학습 가능하도록 설정되었습니다:")
-        for name, param in model.named_parameters():
+# 파인튜닝 레이어 설정 미리보기 버튼
+if st.button("파인튜닝 레이어 미리보기"):
+    st.subheader("파인튜닝 설정 미리보기")
+    st.write("파인튜닝에 사용될 레이어:")
+    if st.session_state['model']:
+        for name, param in st.session_state['model'].named_parameters():
             if param.requires_grad:
                 st.write(f"- {name} (학습 가능)")
-            
-    except Exception as e:
-        st.error(f"파인튜닝 설정 적용 중 오류 발생: {e}")
+            else:
+                st.write(f"- {name} (고정)")
+    else:
+        st.warning("먼저 모델을 로드하거나 초기화해주세요.")
 
 if st.button("분석 시작"):
     image_extensions = ['*.png', '*.jpg', '*.jpeg']
@@ -273,23 +277,10 @@ if st.button("분석 시작"):
         st.info("테스트 이미지 분석을 시작합니다. 잠시만 기다려주세요...")
         
         try:
-            if st.session_state['model'] is None:
-                if model_choice == "ResNet-18 (AngleHead)":
-                    zero_model = AngleHead(pretrained=False).to(device)
-                else:
-                    zero_model = YOLOv5Model().to(device)
-
-                if load_mode == "파인튜닝" and os.path.isfile(os.path.join(CKPT_DIR_ZERO, "best.pth")):
-                    zero_model.load_state_dict(torch.load(os.path.join(CKPT_DIR_ZERO, "best.pth"), map_location=device))
-                    st.info("파인튜닝 모드: 기존 best.pth 가중치를 로드했습니다.")
-                elif load_mode == "파인튜닝":
-                    st.error("파인튜닝 모드입니다. best.pth 파일을 먼저 업로드해야 합니다.")
-                    st.stop()
-                else:
-                    st.info("무작위 초기화 모드: 새로운 모델을 초기화했습니다.")
-            else:
-                zero_model = st.session_state['model']
-                st.info("세션에 저장된 변형된 모델을 사용하여 분석을 진행합니다.")
+            zero_model = st.session_state['model']
+            if zero_model is None:
+                st.error("모델이 로드되지 않았습니다. 페이지를 새로고침하거나 모델을 로드해주세요.")
+                st.stop()
 
             zero_model.eval()
             results = []
@@ -382,11 +373,21 @@ if st.button("분석 결과 보기"):
         )
         st.plotly_chart(fig_roc)
 
+if st.button("초기화"):
+    for file in glob.glob(os.path.join(UPLOAD_DIR_TEST, "*")):
+        os.remove(file)
+    if os.path.exists(os.path.join(CKPT_DIR_ZERO, "best.pth")):
+        os.remove(os.path.join(CKPT_DIR_ZERO, "best.pth"))
+    
+    st.session_state.clear()
+    st.success("앱 상태가 초기화되었습니다.")
+    st.rerun()
+
 st.markdown("---")
 st.subheader("변형된 모델 저장")
 if st.button("변형된 모델 저장"):
     if st.session_state['model'] is None:
-        st.warning("저장할 변형된 모델이 없습니다. '파인튜닝 레이어 설정 적용' 버튼을 먼저 눌러주세요.")
+        st.warning("저장할 변형된 모델이 없습니다.")
     else:
         st.info("파인튜닝된 모델을 저장합니다.")
         filename = st.text_input("저장할 파일 이름을 입력하세요 (예: my_finetuned_model.pth)", "finetuned_model.pth")
@@ -443,13 +444,3 @@ if st.button("분석결과 PDF 다운로드"):
             file_name="analysis_report.pdf",
             mime="application/pdf"
         )
-        
-if st.button("초기화"):
-    for file in glob.glob(os.path.join(UPLOAD_DIR_TEST, "*")):
-        os.remove(file)
-    if os.path.exists(os.path.join(CKPT_DIR_ZERO, "best.pth")):
-        os.remove(os.path.join(CKPT_DIR_ZERO, "best.pth"))
-    
-    st.session_state.clear()
-    st.success("앱 상태가 초기화되었습니다.")
-    st.rerun()

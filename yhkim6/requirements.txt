@@ -15,3 +15,4 @@ opencv-contrib-python
 scikit-image
 torchsummary
 reportlab
+kaleido
