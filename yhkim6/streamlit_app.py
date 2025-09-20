@@ -278,6 +278,19 @@ with col_buttons[2]:
                 def __len__(self): return len(self.items)
                 def __getitem__(self, i):
                     item = self.items[i]
+                    
+                    # filepath에서 파일 이름만 추출
+                    filename = os.path.basename(item['filepath'])
+                    
+                    # 업로드된 파일이 저장된 경로와 파일 이름을 결합
+                    # UPLOAD_DIR_TRAIN은 학습용 이미지가 저장되는 디렉토리입니다.
+                    file_path = os.path.join(UPLOAD_DIR_TRAIN, filename) 
+                    
+                    # 파일이 실제로 존재하는지 확인하는 방어적 코드
+                    if not os.path.isfile(file_path):
+                        # 파일이 존재하지 않으면 오류를 발생시킵니다.
+                        raise FileNotFoundError(f"파일을 찾을 수 없습니다: {file_path}. 업로드된 파일의 유효성을 확인해주세요.")
+
                     x = tfm(Image.open(item['filepath']).convert("L"))
                     y = torch.tensor([item['sin_psi'], item['cos_psi']], dtype=torch.float32)
                     return x, y
