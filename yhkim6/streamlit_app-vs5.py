@@ -21,7 +21,6 @@ import seaborn as sns
 import plotly.graph_objects as go
 import zipfile
 import shutil
-from torchsummary import summary
 
 # =========================================================
 # 기본 설정
@@ -100,7 +99,6 @@ if model_choice == "YOLOv5 (예정)":
     st.sidebar.warning("YOLOv5는 현재 더미 모델로 구현되어 있으며, 실제 기능은 없습니다.")
 
 load_mode = st.sidebar.radio("모델 가중치 로드", ("파인튜닝", "무작위 초기화"))
-finetune_layer = st.sidebar.selectbox("파인튜닝 레이어 선택", ("마지막 레이어만", "모든 레이어"))
 
 st.sidebar.text("")
 
@@ -134,54 +132,6 @@ if load_mode == "파인튜닝":
 # =========================================================
 st.header("🚀 성능 테스트 실행")
 
-# 모델 구조 보기 버튼
-if st.button("모델 구조 보기"):
-    st.info("모델 구조를 분석 중입니다...")
-    model = AngleHead(pretrained=False).to(device)
-    if load_mode == "파인튜닝" and os.path.isfile(os.path.join(CKPT_DIR_ZERO, "best.pth")):
-        model.load_state_dict(torch.load(os.path.join(CKPT_DIR_ZERO, "best.pth"), map_location=device))
-        st.success("파인튜닝 모드: 기존 best.pth 가중치를 로드했습니다.")
-    
-    st.subheader("모델 구조 상세")
-    st.code(model)
-
-# 재학습 버튼
-if st.button("재학습 시작"):
-    st.info("재학습 기능을 준비 중입니다...")
-    # 여기에 재학습 로직을 구현할 수 있습니다.
-    # 예시:
-    # model = AngleHead(pretrained=False).to(device)
-    # ... (가중치 로드 및 옵티마이저 설정) ...
-    # for epoch in range(epochs):
-    #   ... (학습 루프) ...
-    st.warning("재학습 기능은 현재 미구현 상태입니다. 로컬 환경에서 학습 스크립트를 사용해주세요.")
-
-# 변형된 레이어나 가중치를 미리보기 버튼
-if st.button("변형된 레이어 미리보기"):
-    st.info("파인튜닝 레이어 설정을 미리보기 합니다...")
-    model = AngleHead(pretrained=False).to(device)
-    if load_mode == "파인튜닝" and os.path.isfile(os.path.join(CKPT_DIR_ZERO, "best.pth")):
-        model.load_state_dict(torch.load(os.path.join(CKPT_DIR_ZERO, "best.pth"), map_location=device))
-        st.success("파인튜닝 모드: 기존 best.pth 가중치를 로드했습니다.")
-    
-    if finetune_layer == "마지막 레이어만":
-        for name, param in model.named_parameters():
-            if 'fc' in name:
-                param.requires_grad = True
-            else:
-                param.requires_grad = False
-    elif finetune_layer == "모든 레이어":
-        for param in model.parameters():
-            param.requires_grad = True
-            
-    st.subheader("파인튜닝 설정")
-    st.write("파인튜닝에 사용될 레이어:")
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            st.write(f"- {name} (학습 가능)")
-        else:
-            st.write(f"- {name} (고정)")
-    
 if st.button("분석 시작"):
     image_extensions = ['*.png', '*.jpg', '*.jpeg']
     test_files = []
