@@ -26,12 +26,20 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as ReportLabImage
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
+import io
+from contextlib import redirect_stdout
 
 # =========================================================
 # 기본 설정
 # =========================================================
 st.set_page_config(layout="wide")
 st.title("다이얼 게이지 자동 분석 애플리케이션 📊")
+
+# 세션 상태 초기화
+if 'model' not in st.session_state:
+    st.session_state['model'] = None
+if 'analysis_results' not in st.session_state:
+    st.session_state['analysis_results'] = None
 
 # 임시 파일 업로드 디렉토리
 UPLOAD_DIR = "uploaded_files"
@@ -121,7 +129,6 @@ def create_pdf_report(filename, results, cm_fig, roc_fig_path):
     story.append(Paragraph("<b>다이얼 게이지 분석 보고서</b>", styles['Heading1']))
     story.append(Spacer(1, 0.2 * inch))
 
-    # 성능 지표 추가
     story.append(Paragraph("<b>1. 성능 지표</b>", styles['Heading2']))
     story.append(Spacer(1, 0.1 * inch))
     
@@ -146,19 +153,17 @@ def create_pdf_report(filename, results, cm_fig, roc_fig_path):
     story.append(Paragraph(f"Specificity: {specificity:.4f}", styles['Normal']))
     story.append(Spacer(1, 0.2 * inch))
     
-    # 혼동 행렬 이미지 추가
     story.append(Paragraph("<b>2. 혼동 행렬 (Confusion Matrix)</b>", styles['Heading2']))
     cm_img_path = "cm_temp.png"
     cm_fig.savefig(cm_img_path)
     story.append(ReportLabImage(cm_img_path, width=4*inch, height=4*inch))
     story.append(Spacer(1, 0.2 * inch))
 
-    # ROC 곡선 이미지 추가
     story.append(Paragraph("<b>3. ROC 곡선 (ROC Curve)</b>", styles['Heading2']))
     story.append(ReportLabImage(roc_fig_path, width=4*inch, height=4*inch))
 
     doc.build(story)
-    
+
 # =========================================================
 # Streamlit UI
 # =========================================================
@@ -207,40 +212,34 @@ st.header("🚀 성능 테스트 실행")
 if st.button("모델 구조 보기"):
     st.info("모델 구조를 분석 중입니다...")
     try:
-        model = AngleHead(pretrained=False).to(device)
-        if load_mode == "파인튜닝" and os.path.isfile(os.path.join(CKPT_DIR_ZERO, "best.pth")):
-            model.load_state_dict(torch.load(os.path.join(CKPT_DIR_ZERO, "best.pth"), map_location=device))
-            st.success("파인튜닝 모드: 기존 best.pth 가중치를 로드했습니다.")
-        
-        # --- 수정된 부분: 콘솔 출력을 캡처하여 Streamlit에 표시 ---
-        import io
-        from contextlib import redirect_stdout
-        
+        if st.session_state['model'] is None:
+            model_to_view = AngleHead(pretrained=False).to(device)
+            if load_mode == "파인튜닝" and os.path.isfile(os.path.join(CKPT_DIR_ZERO, "best.pth")):
+                model_to_view.load_state_dict(torch.load(os.path.join(CKPT_DIR_ZERO, "best.pth"), map_location=device))
+        else:
+            model_to_view = st.session_state['model']
+
         buffer = io.StringIO()
         with redirect_stdout(buffer):
-            summary(model, (3, 224, 224), device=str(device))
+            summary(model_to_view, (3, 224, 224), device=str(device))
         
         st.subheader("모델 구조 상세")
         st.code(buffer.getvalue())
-        # -------------------------------------------------------------
         
     except Exception as e:
         st.error(f"모델 구조 분석 중 오류 발생: {e}")
-        
-# 재학습 버튼 (기능 미구현 상태임을 명시)
-if st.button("재학습 시작"):
-    st.info("재학습 기능을 준비 중입니다...")
-    st.warning("재학습 기능은 현재 미구현 상태입니다. 로컬 환경에서 학습 스크립트를 사용해주세요.")
 
-# 변형된 레이어나 가중치를 미리보기 버튼
-if st.button("변형된 레이어 미리보기"):
-    st.info("파인튜닝 레이어 설정을 미리보기 합니다...")
-   
+# 파인튜닝 레이어 설정 적용 버튼 (재학습 기능은 현재 없음)
+if st.button("파인튜닝 레이어 설정 적용"):
+    st.info("모델의 파인튜닝 레이어 설정을 적용합니다. 이 설정은 '분석 시작' 버튼에 반영됩니다.")
+    
     try:
         model = AngleHead(pretrained=False).to(device)
         if load_mode == "파인튜닝" and os.path.isfile(os.path.join(CKPT_DIR_ZERO, "best.pth")):
             model.load_state_dict(torch.load(os.path.join(CKPT_DIR_ZERO, "best.pth"), map_location=device))
             st.success("파인튜닝 모드: 기존 best.pth 가중치를 로드했습니다.")
+        elif load_mode == "무작위 초기화":
+            st.warning("무작위 초기화 모드로 설정되었습니다.")
         
         if finetune_layer == "마지막 레이어만":
             for name, param in model.named_parameters():
@@ -251,20 +250,17 @@ if st.button("변형된 레이어 미리보기"):
         elif finetune_layer == "모든 레이어":
             for param in model.parameters():
                 param.requires_grad = True
-        
-        st.session_state['finetune_settings'] = {
-            'layer': finetune_layer,
-            'trainable_layers': [name for name, param in model.named_parameters() if param.requires_grad]
-        }
-        
+            
+        st.session_state['model'] = model
         st.subheader("파인튜닝 설정 적용 결과")
         st.write("다음 레이어가 학습 가능하도록 설정되었습니다:")
-        for name in st.session_state['finetune_settings']['trainable_layers']:
-            st.write(f"- {name}")
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                st.write(f"- {name} (학습 가능)")
             
     except Exception as e:
         st.error(f"파인튜닝 설정 적용 중 오류 발생: {e}")
-    
+
 if st.button("분석 시작"):
     image_extensions = ['*.png', '*.jpg', '*.jpeg']
     test_files = []
@@ -277,19 +273,23 @@ if st.button("분석 시작"):
         st.info("테스트 이미지 분석을 시작합니다. 잠시만 기다려주세요...")
         
         try:
-            if model_choice == "ResNet-18 (AngleHead)":
-                zero_model = AngleHead(pretrained=False).to(device)
-            else:
-                zero_model = YOLOv5Model().to(device)
+            if st.session_state['model'] is None:
+                if model_choice == "ResNet-18 (AngleHead)":
+                    zero_model = AngleHead(pretrained=False).to(device)
+                else:
+                    zero_model = YOLOv5Model().to(device)
 
-            if load_mode == "파인튜닝" and os.path.isfile(os.path.join(CKPT_DIR_ZERO, "best.pth")):
-                zero_model.load_state_dict(torch.load(os.path.join(CKPT_DIR_ZERO, "best.pth"), map_location=device))
-                st.info("파인튜닝 모드: 기존 best.pth 가중치를 로드했습니다.")
-            elif load_mode == "파인튜닝":
-                st.error("파인튜닝 모드입니다. best.pth 파일을 먼저 업로드해야 합니다.")
-                st.stop()
+                if load_mode == "파인튜닝" and os.path.isfile(os.path.join(CKPT_DIR_ZERO, "best.pth")):
+                    zero_model.load_state_dict(torch.load(os.path.join(CKPT_DIR_ZERO, "best.pth"), map_location=device))
+                    st.info("파인튜닝 모드: 기존 best.pth 가중치를 로드했습니다.")
+                elif load_mode == "파인튜닝":
+                    st.error("파인튜닝 모드입니다. best.pth 파일을 먼저 업로드해야 합니다.")
+                    st.stop()
+                else:
+                    st.info("무작위 초기화 모드: 새로운 모델을 초기화했습니다.")
             else:
-                st.info("무작위 초기화 모드: 새로운 모델을 초기화했습니다.")
+                zero_model = st.session_state['model']
+                st.info("세션에 저장된 변형된 모델을 사용하여 분석을 진행합니다.")
 
             zero_model.eval()
             results = []
@@ -382,66 +382,74 @@ if st.button("분석 결과 보기"):
         )
         st.plotly_chart(fig_roc)
 
-if st.button("취소"):
-    if 'analysis_results' in st.session_state:
-        del st.session_state['analysis_results']
-    if 'load_mode' in st.session_state:
-        del st.session_state['load_mode']
-    if 'model_choice' in st.session_state:
-        del st.session_state['model_choice']
-    
+st.markdown("---")
+st.subheader("변형된 모델 저장")
+if st.button("변형된 모델 저장"):
+    if st.session_state['model'] is None:
+        st.warning("저장할 변형된 모델이 없습니다. '파인튜닝 레이어 설정 적용' 버튼을 먼저 눌러주세요.")
+    else:
+        st.info("파인튜닝된 모델을 저장합니다.")
+        filename = st.text_input("저장할 파일 이름을 입력하세요 (예: my_finetuned_model.pth)", "finetuned_model.pth")
+        
+        if st.button("확인"):
+            if not filename.endswith(".pth"):
+                st.error("파일 이름은 '.pth'로 끝나야 합니다.")
+            else:
+                save_path = os.path.join(CKPT_DIR_ZERO, filename)
+                torch.save(st.session_state['model'].state_dict(), save_path)
+                st.success(f"모델이 '{filename}' 파일로 저장되었습니다.")
+                
+                with open(save_path, "rb") as f:
+                    st.download_button(
+                        label=f"{filename} 다운로드",
+                        data=f,
+                        file_name=filename,
+                        mime="application/octet-stream"
+                    )
+
+st.markdown("---")
+st.subheader("분석 결과 다운로드")
+if st.button("분석결과 PDF 다운로드"):
+    if st.session_state['analysis_results'] is None:
+        st.warning("분석 결과를 먼저 생성해야 합니다.")
+    else:
+        st.info("PDF 보고서를 생성합니다.")
+        
+        cm_fig, ax_cm = plt.subplots()
+        cm = confusion_matrix(
+            [1 if r['true_mm'] > 0.5 else 0 for r in st.session_state['analysis_results']],
+            [1 if r['predicted_psi_rad'] > math.pi else 0 for r in st.session_state['analysis_results']]
+        )
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax_cm)
+        cm_fig.savefig("cm_temp.png")
+
+        y_true_binary = [1 if r['true_mm'] > 0.5 else 0 for r in st.session_state['analysis_results']]
+        y_scores = [r['predicted_psi_rad'] / TWO_PI for r in st.session_state['analysis_results']]
+        fpr, tpr, _ = roc_curve(y_true_binary, y_scores)
+        roc_auc = auc(fpr, tpr)
+        fig_roc = go.Figure()
+        fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f'ROC curve (AUC = {roc_auc:.2f})'))
+        fig_roc.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode='lines', name='Random Guess', line=dict(dash='dash')))
+        fig_roc.update_layout(title='ROC Curve')
+        fig_roc.write_image("roc_temp.png")
+        
+        pdf_buffer = io.BytesIO()
+        create_pdf_report(pdf_buffer, st.session_state['analysis_results'], cm_fig, "roc_temp.png")
+        pdf_buffer.seek(0)
+        
+        st.download_button(
+            label="PDF 보고서 다운로드",
+            data=pdf_buffer,
+            file_name="analysis_report.pdf",
+            mime="application/pdf"
+        )
+        
+if st.button("초기화"):
     for file in glob.glob(os.path.join(UPLOAD_DIR_TEST, "*")):
         os.remove(file)
     if os.path.exists(os.path.join(CKPT_DIR_ZERO, "best.pth")):
         os.remove(os.path.join(CKPT_DIR_ZERO, "best.pth"))
     
-    st.rerun()
+    st.session_state.clear()
     st.success("앱 상태가 초기화되었습니다.")
-
-st.markdown("---")
-st.subheader("분석 결과 PDF 저장")
-if st.button("분석결과 PDF파일로 저장하기"):
-    if 'analysis_results' not in st.session_state:
-        st.warning("분석 결과를 먼저 생성해야 합니다.")
-    else:
-        st.info("PDF 보고서를 생성합니다.")
-        
-                # 추가된 코드: PDF 파일이 저장되는 서버 경로를 보여줌
-        st.info(f"PDF 파일은 서버의 다음 경로에 임시 저장됩니다: {os.getcwd()}")
-        st.warning("이 경로는 Streamlit Cloud의 임시 공간이므로, 다운로드 버튼을 눌러야 사용자 PC에 저장됩니다.")
-        
-        filename = st.text_input("저장할 파일 이름을 입력하세요 (예: report.pdf)", "report.pdf")
-        
-        if st.button("PDF 저장 확인"):
-            if not filename.endswith(".pdf"):
-                st.error("파일 이름은 '.pdf'로 끝나야 합니다.")
-            else:
-                cm_fig, ax_cm = plt.subplots()
-                cm = confusion_matrix(
-                    [1 if r['true_mm'] > 0.5 else 0 for r in st.session_state['analysis_results']],
-                    [1 if r['predicted_psi_rad'] > math.pi else 0 for r in st.session_state['analysis_results']]
-                )
-                sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax_cm)
-                cm_fig.savefig("cm_temp.png")
-
-                # Plotly ROC 곡선을 이미지로 저장
-                y_true_binary = [1 if r['true_mm'] > 0.5 else 0 for r in st.session_state['analysis_results']]
-                y_scores = [r['predicted_psi_rad'] / TWO_PI for r in st.session_state['analysis_results']]
-                fpr, tpr, _ = roc_curve(y_true_binary, y_scores)
-                roc_auc = auc(fpr, tpr)
-                fig_roc = go.Figure()
-                fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f'ROC curve (AUC = {roc_auc:.2f})'))
-                fig_roc.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode='lines', name='Random Guess', line=dict(dash='dash')))
-                fig_roc.update_layout(title='ROC Curve')
-                fig_roc.write_image("roc_temp.png")
-
-                create_pdf_report(filename, st.session_state['analysis_results'], cm_fig, "roc_temp.png")
-                
-                with open(filename, "rb") as f:
-                    st.download_button(
-                        label=f"'{filename}' 다운로드",
-                        data=f,
-                        file_name=filename,
-                        mime="application/pdf"
-                    )
-                st.success(f"PDF 보고서 '{filename}'가 생성되었습니다.")
+    st.rerun()
