@@ -1,4 +1,3 @@
-# streamlit_app.py
 import streamlit as st
 import os
 import re
@@ -28,6 +27,8 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 import io
 from contextlib import redirect_stdout
+import pandas as pd
+import openpyxl
 
 # =========================================================
 # 기본 설정
@@ -44,6 +45,8 @@ if 'cm_fig_path' not in st.session_state:
     st.session_state['cm_fig_path'] = None
 if 'roc_fig_path' not in st.session_state:
     st.session_state['roc_fig_path'] = None
+if 'metrics' not in st.session_state:
+    st.session_state['metrics'] = {}
 
 # 임시 파일 업로드 디렉토리
 UPLOAD_DIR = "uploaded_files"
@@ -191,7 +194,7 @@ else:
     st.sidebar.warning("모델을 로드하면 레이어 목록이 표시됩니다.")
 
 # 파인튜닝 설정 적용 버튼 (재학습 기능은 현재 없음)
-if st.button("파인튜닝 설정 적용"):
+if st.button("파인튜닝 레이어 설정 적용"):
     if st.session_state['model'] is None:
         st.warning("먼저 모델을 로드하거나 초기화해주세요.")
     else:
@@ -448,7 +451,7 @@ if st.button("분석결과 PDF 다운로드"):
         fig_roc.write_image("roc_temp.png")
         
         pdf_buffer = io.BytesIO()
-        create_pdf_report(pdf_buffer, st.session_state['analysis_results'], cm_fig, "roc_temp.png")
+        create_pdf_report(pdf_buffer, st.session_state['analysis_results'], "cm_temp.png", "roc_temp.png")
         pdf_buffer.seek(0)
         
         st.download_button(
