@@ -40,6 +40,10 @@ if 'model' not in st.session_state:
     st.session_state['model'] = None
 if 'analysis_results' not in st.session_state:
     st.session_state['analysis_results'] = None
+if 'cm_fig_path' not in st.session_state:
+    st.session_state['cm_fig_path'] = None
+if 'roc_fig_path' not in st.session_state:
+    st.session_state['roc_fig_path'] = None
 
 # 임시 파일 업로드 디렉토리
 UPLOAD_DIR = "uploaded_files"
@@ -121,7 +125,7 @@ class PsiDataset(Dataset):
         return x, y
 
 # PDF 리포트 생성 함수
-def create_pdf_report(filename, results, cm_fig, roc_fig_path):
+def create_pdf_report(filename, results, cm_fig_path, roc_fig_path):
     doc = SimpleDocTemplate(filename, pagesize=letter)
     styles = getSampleStyleSheet()
     story = []
@@ -154,9 +158,7 @@ def create_pdf_report(filename, results, cm_fig, roc_fig_path):
     story.append(Spacer(1, 0.2 * inch))
     
     story.append(Paragraph("<b>2. 혼동 행렬 (Confusion Matrix)</b>", styles['Heading2']))
-    cm_img_path = "cm_temp.png"
-    cm_fig.savefig(cm_img_path)
-    story.append(ReportLabImage(cm_img_path, width=4*inch, height=4*inch))
+    story.append(ReportLabImage(cm_fig_path, width=4*inch, height=4*inch))
     story.append(Spacer(1, 0.2 * inch))
 
     story.append(Paragraph("<b>3. ROC 곡선 (ROC Curve)</b>", styles['Heading2']))
@@ -177,22 +179,30 @@ load_mode = st.sidebar.radio("모델 가중치 로드", ("파인튜닝", "무작
 
 # 파인튜닝 레이어 설정 목록 버튼
 st.sidebar.header("파인튜닝 설정")
-finetune_layer = st.sidebar.selectbox("파인튜닝 레이어 선택", ("마지막 레이어만", "모든 레이어"))
-if st.sidebar.button("파인튜닝 설정 적용"):
+if st.session_state['model'] is not None:
+    layer_names = [name for name, param in st.session_state['model'].named_parameters()]
+    finetune_layers_list = st.sidebar.multiselect(
+        "파인튜닝할 레이어 선택",
+        options=layer_names,
+        default=['backbone.fc.weight', 'backbone.fc.bias']
+    )
+else:
+    finetune_layers_list = []
+    st.sidebar.warning("모델을 로드하면 레이어 목록이 표시됩니다.")
+
+# 파인튜닝 설정 적용 버튼 (재학습 기능은 현재 없음)
+if st.button("파인튜닝 설정 적용"):
     if st.session_state['model'] is None:
         st.warning("먼저 모델을 로드하거나 초기화해주세요.")
     else:
         try:
-            if finetune_layer == "마지막 레이어만":
-                for name, param in st.session_state['model'].named_parameters():
-                    if 'fc' in name:
-                        param.requires_grad = True
-                    else:
-                        param.requires_grad = False
-            elif finetune_layer == "모든 레이어":
-                for param in st.session_state['model'].parameters():
+            for name, param in st.session_state['model'].named_parameters():
+                if name in finetune_layers_list:
                     param.requires_grad = True
+                else:
+                    param.requires_grad = False
             st.success("파인튜닝 레이어 설정이 적용되었습니다.")
+            st.info("이 설정은 '분석 시작' 버튼에 반영됩니다.")
         except Exception as e:
             st.error(f"파인튜닝 설정 적용 중 오류 발생: {e}")
 
@@ -244,11 +254,14 @@ st.header("🚀 성능 테스트 실행")
 if st.button("모델 구조 보기"):
     st.info("모델 구조를 분석 중입니다...")
     try:
-        buffer = io.StringIO()
-        with redirect_stdout(buffer):
-            summary(st.session_state['model'], (3, 224, 224), device=str(device))
-        st.subheader("모델 구조 상세")
-        st.code(buffer.getvalue())
+        if st.session_state['model'] is None:
+            st.warning("모델이 로드되지 않았습니다.")
+        else:
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                summary(st.session_state['model'], (3, 224, 224), device=str(device))
+            st.subheader("모델 구조 상세")
+            st.code(buffer.getvalue())
     except Exception as e:
         st.error(f"모델 구조 분석 중 오류 발생: {e}")
 
