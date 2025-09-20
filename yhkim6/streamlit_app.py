@@ -206,14 +206,27 @@ st.header("🚀 성능 테스트 실행")
 # 모델 구조 보기 버튼
 if st.button("모델 구조 보기"):
     st.info("모델 구조를 분석 중입니다...")
-    model = AngleHead(pretrained=False).to(device)
-    if load_mode == "파인튜닝" and os.path.isfile(os.path.join(CKPT_DIR_ZERO, "best.pth")):
-        model.load_state_dict(torch.load(os.path.join(CKPT_DIR_ZERO, "best.pth"), map_location=device))
-        st.success("파인튜닝 모드: 기존 best.pth 가중치를 로드했습니다.")
-    
-    st.subheader("모델 구조 상세")
-    st.code(summary(model, (3, 224, 224), device=str(device)).__str__())
-
+     try:
+        model = AngleHead(pretrained=False).to(device)
+        if load_mode == "파인튜닝" and os.path.isfile(os.path.join(CKPT_DIR_ZERO, "best.pth")):
+            model.load_state_dict(torch.load(os.path.join(CKPT_DIR_ZERO, "best.pth"), map_location=device))
+            st.success("파인튜닝 모드: 기존 best.pth 가중치를 로드했습니다.")
+        
+        # --- 수정된 부분: 콘솔 출력을 캡처하여 Streamlit에 표시 ---
+        import io
+        from contextlib import redirect_stdout
+        
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            summary(model, (3, 224, 224), device=str(device))
+        
+        st.subheader("모델 구조 상세")
+        st.code(buffer.getvalue())
+        # -------------------------------------------------------------
+        
+    except Exception as e:
+        st.error(f"모델 구조 분석 중 오류 발생: {e}")
+        
 # 재학습 버튼 (기능 미구현 상태임을 명시)
 if st.button("재학습 시작"):
     st.info("재학습 기능을 준비 중입니다...")
@@ -222,28 +235,35 @@ if st.button("재학습 시작"):
 # 변형된 레이어나 가중치를 미리보기 버튼
 if st.button("변형된 레이어 미리보기"):
     st.info("파인튜닝 레이어 설정을 미리보기 합니다...")
-    model = AngleHead(pretrained=False).to(device)
-    if load_mode == "파인튜닝" and os.path.isfile(os.path.join(CKPT_DIR_ZERO, "best.pth")):
-        model.load_state_dict(torch.load(os.path.join(CKPT_DIR_ZERO, "best.pth"), map_location=device))
-        st.success("파인튜닝 모드: 기존 best.pth 가중치를 로드했습니다.")
-    
-    if finetune_layer == "마지막 레이어만":
-        for name, param in model.named_parameters():
-            if 'fc' in name:
+   
+    try:
+        model = AngleHead(pretrained=False).to(device)
+        if load_mode == "파인튜닝" and os.path.isfile(os.path.join(CKPT_DIR_ZERO, "best.pth")):
+            model.load_state_dict(torch.load(os.path.join(CKPT_DIR_ZERO, "best.pth"), map_location=device))
+            st.success("파인튜닝 모드: 기존 best.pth 가중치를 로드했습니다.")
+        
+        if finetune_layer == "마지막 레이어만":
+            for name, param in model.named_parameters():
+                if 'fc' in name:
+                    param.requires_grad = True
+                else:
+                    param.requires_grad = False
+        elif finetune_layer == "모든 레이어":
+            for param in model.parameters():
                 param.requires_grad = True
-            else:
-                param.requires_grad = False
-    elif finetune_layer == "모든 레이어":
-        for param in model.parameters():
-            param.requires_grad = True
+        
+        st.session_state['finetune_settings'] = {
+            'layer': finetune_layer,
+            'trainable_layers': [name for name, param in model.named_parameters() if param.requires_grad]
+        }
+        
+        st.subheader("파인튜닝 설정 적용 결과")
+        st.write("다음 레이어가 학습 가능하도록 설정되었습니다:")
+        for name in st.session_state['finetune_settings']['trainable_layers']:
+            st.write(f"- {name}")
             
-    st.subheader("파인튜닝 설정")
-    st.write("파인튜닝에 사용될 레이어:")
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            st.write(f"- {name} (학습 가능)")
-        else:
-            st.write(f"- {name} (고정)")
+    except Exception as e:
+        st.error(f"파인튜닝 설정 적용 중 오류 발생: {e}")
     
 if st.button("분석 시작"):
     image_extensions = ['*.png', '*.jpg', '*.jpeg']
@@ -385,8 +405,13 @@ if st.button("분석결과 PDF파일로 저장하기"):
         st.warning("분석 결과를 먼저 생성해야 합니다.")
     else:
         st.info("PDF 보고서를 생성합니다.")
+        
+                # 추가된 코드: PDF 파일이 저장되는 서버 경로를 보여줌
+        st.info(f"PDF 파일은 서버의 다음 경로에 임시 저장됩니다: {os.getcwd()}")
+        st.warning("이 경로는 Streamlit Cloud의 임시 공간이므로, 다운로드 버튼을 눌러야 사용자 PC에 저장됩니다.")
+        
         filename = st.text_input("저장할 파일 이름을 입력하세요 (예: report.pdf)", "report.pdf")
-
+        
         if st.button("PDF 저장 확인"):
             if not filename.endswith(".pdf"):
                 st.error("파일 이름은 '.pdf'로 끝나야 합니다.")
