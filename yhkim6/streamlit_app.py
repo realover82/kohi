@@ -67,6 +67,14 @@ st.sidebar.info(f"사용 중인 장치: {device}")
 # 모델 및 유틸리티 함수 정의
 # =========================================================
 
+# tfm 변수를 전역으로 정의
+tfm = T.Compose([
+    T.Resize((224, 224)),
+    T.ToTensor(),
+    T.Lambda(lambda x: x.expand(3, -1, -1)),
+    T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+])
+
 class AngleHead(nn.Module):
     def __init__(self, pretrained=True):
         super().__init__()
@@ -133,7 +141,7 @@ def create_pdf_report(filename, results, cm_fig_path, roc_fig_path):
     story.append(ReportLabImage(roc_fig_path, width=4*inch, height=4*inch))
 
     doc.build(story)
-
+    
 # =========================================================
 # Streamlit UI
 # =========================================================
@@ -279,6 +287,7 @@ if st.button("분석 시작"):
                     continue
                 
                 with torch.no_grad():
+                    # tfm 변수가 전역으로 정의되어 있으므로 그대로 사용
                     x = tfm(Image.open(fp).convert("L")).unsqueeze(0).to(device)
                     y = zero_model(x)[0].cpu().numpy()
                 
