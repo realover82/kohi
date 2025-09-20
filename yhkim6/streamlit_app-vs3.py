@@ -286,10 +286,6 @@ with col_buttons[2]:
                 reader = csv.DictReader(f)
                 items = [{"filepath": r["filepath"], "sin_psi": float(r["sin_psi"]), "cos_psi": float(r["cos_psi"])} for r in reader]
 
-            if not items:
-                st.error("데이터셋에 유효한 샘플이 없습니다. 파일이 올바르게 업로드되었고 파일명 형식이 올바른지 확인해주세요.")
-                st.stop()
-
             random.shuffle(items)
             split = int(len(items) * 0.9)
             train_items, val_items = items[:split], items[split:]
