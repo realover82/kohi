@@ -21,6 +21,10 @@ import plotly.graph_objects as go
 import zipfile
 import shutil
 from torchsummary import summary
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as ReportLabImage
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
 import io
 from contextlib import redirect_stdout
 import pandas as pd
@@ -88,14 +92,60 @@ TWO_PI = 2.0 * math.pi
 def wrap_angle(x):
     return (x + TWO_PI) % TWO_PI
 
+# PDF 리포트 생성 함수
+def create_pdf_report(filename, results, cm_fig_path, roc_fig_path):
+    doc = SimpleDocTemplate(filename, pagesize=letter)
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph("<b>다이얼 게이지 분석 보고서</b>", styles['Heading1']))
+    story.append(Spacer(1, 0.2 * inch))
+
+    story.append(Paragraph("<b>1. 성능 지표</b>", styles['Heading2']))
+    story.append(Spacer(1, 0.1 * inch))
+    
+    y_true_binary = [1 if r['true_mm'] > 0.5 else 0 for r in results]
+    y_pred_binary = [1 if r['predicted_psi_rad'] > math.pi else 0 for r in results]
+    accuracy = accuracy_score(y_true_binary, y_pred_binary)
+    precision = precision_score(y_true_binary, y_pred_binary, zero_division=0)
+    recall = recall_score(y_true_binary, y_pred_binary, zero_division=0)
+    f1 = f1_score(y_true_binary, y_pred_binary, zero_division=0)
+    
+    cm = confusion_matrix(y_true_binary, y_pred_binary)
+    if cm.shape == (2, 2):
+        tn, fp, fn, tp = cm.ravel()
+        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+    else:
+        specificity = 0
+
+    story.append(Paragraph(f"Accuracy: {accuracy:.4f}", styles['Normal']))
+    story.append(Paragraph(f"Precision: {precision:.4f}", styles['Normal']))
+    story.append(Paragraph(f"Recall (Sensitivity): {recall:.4f}", styles['Normal']))
+    story.append(Paragraph(f"F1 Score: {f1:.4f}", styles['Normal']))
+    story.append(Paragraph(f"Specificity: {specificity:.4f}", styles['Normal']))
+    story.append(Spacer(1, 0.2 * inch))
+    
+    story.append(Paragraph("<b>2. 혼동 행렬 (Confusion Matrix)</b>", styles['Heading2']))
+    story.append(ReportLabImage(cm_fig_path, width=4*inch, height=4*inch))
+    story.append(Spacer(1, 0.2 * inch))
+
+    story.append(Paragraph("<b>3. ROC 곡선 (ROC Curve)</b>", styles['Heading2']))
+    story.append(ReportLabImage(roc_fig_path, width=4*inch, height=4*inch))
+
+    doc.build(story)
+
 # =========================================================
 # Streamlit UI
 # =========================================================
 st.sidebar.header("⚙️ 모델 설정")
+
 model_choice = st.sidebar.selectbox("모델 선택", ("ResNet-18 (AngleHead)", "YOLOv5 (예정)"))
+if model_choice == "YOLOv5 (예정)":
+    st.sidebar.warning("YOLOv5는 현재 더미 모델로 구현되어 있으며, 실제 기능은 없습니다.")
 
 load_mode = st.sidebar.radio("모델 가중치 로드", ("파인튜닝", "무작위 초기화"))
 
+# 파인튜닝 레이어 설정 목록 버튼
 st.sidebar.header("파인튜닝 설정")
 if st.session_state['model'] is not None:
     layer_names = [name for name, param in st.session_state['model'].named_parameters()]
@@ -108,19 +158,21 @@ else:
     finetune_layers_list = []
     st.sidebar.warning("모델을 로드하면 레이어 목록이 표시됩니다.")
 
-if st.sidebar.button("파인튜닝 설정 적용"):
+# 파인튜닝 설정 적용 버튼 (재학습 기능은 현재 없음)
+if st.button("파인튜닝 설정 적용"):
     if st.session_state['model'] is None:
-        st.sidebar.warning("먼저 모델을 로드하거나 초기화해주세요.")
+        st.warning("먼저 모델을 로드하거나 초기화해주세요.")
     else:
-        for name, param in st.session_state['model'].named_parameters():
-            if name in finetune_layers_list:
-                param.requires_grad = True
-            else:
-                param.requires_grad = False
-        st.session_state['finetune_preview'] = {
-            'trainable_layers': [name for name, param in st.session_state['model'].named_parameters() if param.requires_grad]
-        }
-        st.sidebar.success("파인튜닝 레이어 설정이 적용되었습니다.")
+        try:
+            for name, param in st.session_state['model'].named_parameters():
+                if name in finetune_layers_list:
+                    param.requires_grad = True
+                else:
+                    param.requires_grad = False
+            st.success("파인튜닝 레이어 설정이 적용되었습니다.")
+            st.info("이 설정은 '분석 시작' 버튼에 반영됩니다.")
+        except Exception as e:
+            st.error(f"파인튜닝 설정 적용 중 오류 발생: {e}")
 
 st.sidebar.text("")
 
@@ -166,15 +218,18 @@ if st.session_state['model'] is None:
 # =========================================================
 st.header("🚀 성능 테스트 실행")
 
-# 모델 구조 보기
+# 모델 구조 보기 버튼
 if st.button("모델 구조 보기"):
     st.info("모델 구조를 분석 중입니다...")
     try:
-        buffer = io.StringIO()
-        with redirect_stdout(buffer):
-            summary(st.session_state['model'], (3, 224, 224), device=str(device))
-        st.session_state['model_summary'] = buffer.getvalue()
-        st.success("모델 구조 분석 완료!")
+        if st.session_state['model'] is None:
+            st.warning("모델이 로드되지 않았습니다.")
+        else:
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                summary(st.session_state['model'], (3, 224, 224), device=str(device))
+            st.session_state['model_summary'] = buffer.getvalue()
+            st.success("모델 구조 분석 완료!")
     except Exception as e:
         st.error(f"모델 구조 분석 중 오류 발생: {e}")
 
@@ -182,7 +237,7 @@ if st.session_state['model_summary']:
     st.subheader("모델 구조 상세")
     st.code(st.session_state['model_summary'])
 
-# 파인튜닝 레이어 미리보기
+# 파인튜닝 레이어 설정 미리보기 버튼
 if st.button("파인튜닝 레이어 미리보기"):
     st.info("파인튜닝 레이어 설정을 미리보기 합니다...")
     if st.session_state['model']:
@@ -208,11 +263,13 @@ if st.button("분석 시작"):
         st.warning("분석을 시작하려면 테스트용 이미지를 먼저 업로드해주세요.")
     else:
         st.info("테스트 이미지 분석을 시작합니다. 잠시만 기다려주세요...")
+        
         try:
             zero_model = st.session_state['model']
             if zero_model is None:
                 st.error("모델이 로드되지 않았습니다. 페이지를 새로고침하거나 모델을 로드해주세요.")
                 st.stop()
+
             zero_model.eval()
             results = []
             for fp in test_files:
@@ -220,17 +277,26 @@ if st.button("분석 시작"):
                 if mm_from_name is None: 
                     st.warning(f"파일명에서 mm 값을 파싱할 수 없습니다: {os.path.basename(fp)}. 이 파일은 분석에서 제외됩니다.")
                     continue
+                
                 with torch.no_grad():
                     x = tfm(Image.open(fp).convert("L")).unsqueeze(0).to(device)
                     y = zero_model(x)[0].cpu().numpy()
+                
                 psi_pred = wrap_angle(math.atan2(float(y[0]), float(y[1])))
+                
                 results.append({
                     "filepath": fp,
                     "predicted_psi_rad": psi_pred,
                     "true_mm": mm_from_name
                 })
+            
+            if not results:
+                st.error("분석할 유효한 파일이 없습니다. 파일명 형식을 확인해주세요.")
+                st.stop()
+
             st.session_state['analysis_results'] = results
             st.success("분석 완료!")
+        
         except Exception as e:
             st.error(f"분석 중 오류 발생: {e}")
 
@@ -332,7 +398,6 @@ if st.button("분석결과 엑셀 다운로드"):
     else:
         results_df = pd.DataFrame(st.session_state['analysis_results'])
         
-        # 성능 지표도 함께 저장
         metrics_df = pd.DataFrame([st.session_state['metrics']])
         
         buffer = io.BytesIO()
