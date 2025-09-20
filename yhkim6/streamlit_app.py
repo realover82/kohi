@@ -75,7 +75,8 @@ tfm = T.Compose([
 
 def parse_mm_prefix(fp):
     name = os.path.basename(fp)
-    m = re.match(r"^\D*?(\d{2})", name)
+    # 수정된 정규식: "0-" 또는 "00-" 형태를 모두 인식
+    m = re.match(r"^\D*?(\d{1,2})", name)
     if not m:
         return None
     v = int(m.group(1))
@@ -96,7 +97,6 @@ model_choice = st.sidebar.selectbox("모델 선택", ("ResNet-18 (AngleHead)", "
 if model_choice == "YOLOv5 (예정)":
     st.sidebar.warning("YOLOv5는 현재 더미 모델로 구현되어 있으며, 실제 기능은 없습니다.")
 
-# 모델 가중치 로드 옵션 (파인튜닝 옵션)
 load_mode = st.sidebar.radio("모델 가중치 로드", ("파인튜닝", "무작위 초기화"))
 
 st.sidebar.text("")
@@ -105,11 +105,10 @@ st.sidebar.text("")
 # 파일 업로드 섹션
 # =========================================================
 st.header("📂 데이터 업로드")
-st.markdown("성능 테스트에 사용할 다이얼 게이지 이미지를 업로드하세요. 파일명은 `00-sample.png` 형식으로 `mm` 값이 포함되어야 합니다.")
+st.markdown("성능 테스트에 사용할 다이얼 게이지 이미지를 업로드하세요. 파일명은 `0-sample.png` 또는 `00-sample.png` 형식으로 `mm` 값이 포함되어야 합니다.")
 
 uploaded_test_files = st.file_uploader("테스트용 이미지 업로드", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key="test_uploader")
 if uploaded_test_files:
-    # 기존 파일 삭제 후 새로 업로드
     for file in glob.glob(os.path.join(UPLOAD_DIR_TEST, "*")):
         os.remove(file)
     for uploaded_file in uploaded_test_files:
@@ -197,6 +196,18 @@ if st.button("분석 결과 보기"):
 
         st.subheader("혼동 행렬 (Confusion Matrix)")
         cm = confusion_matrix(y_true_binary, y_pred_binary)
+        
+        if cm.shape == (2, 2):
+            tn, fp, fn, tp = cm.ravel()
+        elif cm.shape == (1, 1):
+            if y_true_binary[0] == 1:
+                tn, fp, fn, tp = 0, 0, 0, cm[0][0]
+            else:
+                tn, fp, fn, tp = cm[0][0], 0, 0, 0
+        else:
+            tn, fp, fn, tp = 0, 0, 0, 0
+            st.warning("혼동 행렬의 크기가 예상과 다릅니다. 성능 지표를 계산할 수 없습니다.")
+        
         fig_cm, ax_cm = plt.subplots()
         sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax_cm)
         ax_cm.set_xlabel('Predicted')
@@ -205,10 +216,9 @@ if st.button("분석 결과 보기"):
         
         st.subheader("성능 지표")
         accuracy = accuracy_score(y_true_binary, y_pred_binary)
-        precision = precision_score(y_true_binary, y_pred_binary)
-        recall = recall_score(y_true_binary, y_pred_binary)
-        f1 = f1_score(y_true_binary, y_pred_binary)
-        tn, fp, fn, tp = cm.ravel()
+        precision = precision_score(y_true_binary, y_pred_binary, zero_division=0)
+        recall = recall_score(y_true_binary, y_pred_binary, zero_division=0)
+        f1 = f1_score(y_true_binary, y_pred_binary, zero_division=0)
         specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
 
         st.write(f"**Accuracy:** {accuracy:.4f}")
@@ -234,7 +244,6 @@ if st.button("분석 결과 보기"):
         st.plotly_chart(fig_roc)
 
 if st.button("취소"):
-    # 상태 초기화
     if 'analysis_results' in st.session_state:
         del st.session_state['analysis_results']
     if 'load_mode' in st.session_state:
@@ -242,7 +251,6 @@ if st.button("취소"):
     if 'model_choice' in st.session_state:
         del st.session_state['model_choice']
     
-    # 업로드된 파일 삭제
     for file in glob.glob(os.path.join(UPLOAD_DIR_TEST, "*")):
         os.remove(file)
     if os.path.exists(os.path.join(CKPT_DIR_ZERO, "best.pth")):
