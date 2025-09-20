@@ -206,7 +206,7 @@ st.header("🚀 성능 테스트 실행")
 # 모델 구조 보기 버튼
 if st.button("모델 구조 보기"):
     st.info("모델 구조를 분석 중입니다...")
-     try:
+    try:
         model = AngleHead(pretrained=False).to(device)
         if load_mode == "파인튜닝" and os.path.isfile(os.path.join(CKPT_DIR_ZERO, "best.pth")):
             model.load_state_dict(torch.load(os.path.join(CKPT_DIR_ZERO, "best.pth"), map_location=device))
