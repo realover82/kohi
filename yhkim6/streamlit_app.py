@@ -9,16 +9,18 @@ import random
 import time
 import json
 import numpy as np
-import cv2
-from PIL import Image
+from PIL import Image, ImageOps
+from skimage.transform import rotate as sk_rotate
+from skimage.util import img_as_ubyte
+from skimage import exposure
+from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score, roc_curve, auc
+import matplotlib.pyplot as plt
+import seaborn as sns
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as T
 import torchvision.models as tvm
-from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score, roc_curve, auc
-import matplotlib.pyplot as plt
-import seaborn as sns
 import plotly.graph_objects as go
 
 # =========================================================
@@ -93,6 +95,27 @@ TWO_PI = 2.0 * math.pi
 def wrap_angle(x):
     return (x + TWO_PI) % TWO_PI
 
+# draw_arrow 함수를 Pillow 기반으로 재작성
+def draw_arrow(pil_img, theta_deg, color, text):
+    draw = ImageDraw.Draw(pil_img)
+    w, h = pil_img.size
+    cx, cy = w // 2, h // 2
+    R = int(min(w, h) * 0.45)
+    
+    # 각도 계산 (12시=0°, 시계방향)
+    th_rad = math.radians(theta_deg)
+    x2 = int(round(cx + math.sin(th_rad) * R))
+    y2 = int(round(cy - math.cos(th_rad) * R))
+
+    # 화살표 그리기 (단순 선으로 대체)
+    draw.line([(cx, cy), (x2, y2)], fill=color, width=2)
+    
+    # 텍스트 그리기
+    font = ImageFont.truetype("Arial.ttf", 20)
+    draw.text((10, 10), text, fill=color, font=font)
+    
+    return pil_img
+
 # =========================================================
 # Streamlit UI
 # =========================================================
@@ -163,7 +186,6 @@ with col_buttons[0]:
             st.info("테스트 이미지 분석을 시작합니다. 잠시만 기다려주세요...")
             
             try:
-                # ZeroHead 모델 로드
                 zero_model = AngleHead(pretrained=False).to(device)
                 if os.path.isfile(os.path.join(CKPT_DIR_ZERO, "best.pth")):
                     zero_model.load_state_dict(torch.load(os.path.join(CKPT_DIR_ZERO, "best.pth"), map_location=device))
@@ -172,7 +194,6 @@ with col_buttons[0]:
                     st.error("ZeroHead 모델 가중치를 찾을 수 없습니다. '학습 시작' 버튼을 눌러 학습을 먼저 진행해주세요.")
                     st.stop()
                 
-                # 예측 및 결과 저장
                 zero_model.eval()
                 results = []
                 for fp in glob.glob(os.path.join(UPLOAD_DIR_TEST, "*.png")):
@@ -187,8 +208,6 @@ with col_buttons[0]:
                     
                     psi_pred = wrap_angle(math.atan2(float(y[0]), float(y[1])))
                     
-                    # 정확도를 위해 θ 모델이 필요하지만, 여기서는 ψ 모델의 예측값을 mm_from_name과 비교하여 유사성 검증 (임시)
-                    # 실제 프로젝트에서는 θ - ψ 로 mm 값을 계산해야 함
                     results.append({
                         "filepath": fp,
                         "predicted_psi_rad": psi_pred,
@@ -204,11 +223,9 @@ with col_buttons[0]:
 
 with col_buttons[1]:
     if st.button("모델 저장"):
-        # 이전에 학습된 모델 가중치를 저장하는 기능
         if not os.path.isfile(os.path.join(CKPT_DIR_ZERO, "best.pth")):
             st.warning("먼저 '학습 시작' 버튼을 눌러 모델 학습을 완료해야 합니다.")
         else:
-            # 여기서는 파일 다운로드 기능으로 대체
             with open(os.path.join(CKPT_DIR_ZERO, "best.pth"), "rb") as f:
                 st.download_button(
                     label="ZeroHead 모델 가중치 다운로드",
@@ -218,7 +235,6 @@ with col_buttons[1]:
                 )
             st.success("모델 가중치 파일을 다운로드할 수 있습니다.")
 
-
 with col_buttons[2]:
     if st.button("학습 시작"):
         if not uploaded_train_files:
@@ -227,11 +243,9 @@ with col_buttons[2]:
             st.info(f"선택한 설정으로 모델 학습을 시작합니다. (Epoch: {epochs})")
             
             try:
-                # 1. Pseudo 라벨 생성
                 st.info("1단계: Pseudo 라벨 생성 중...")
                 theta_model = AngleHead(pretrained=True).to(device)
                 
-                # θ 모델 가중치 존재 확인 (필요한 경우 사전 다운로드)
                 if os.path.isfile(os.path.join(CKPT_DIR_THETA, "best.pth")):
                     theta_model.load_state_dict(torch.load(os.path.join(CKPT_DIR_THETA, "best.pth"), map_location=device))
                 else:
@@ -258,7 +272,6 @@ with col_buttons[2]:
                 
                 st.success("Pseudo 라벨 생성 완료.")
 
-                # 2. ZeroHead 모델 학습
                 st.info("2단계: ZeroHead 모델 학습 중...")
                 if model_choice == "ResNet-18 (AngleHead)":
                     model = AngleHead(pretrained=(weights_choice == "사전 학습 가중치 적용")).to(device)
@@ -271,12 +284,12 @@ with col_buttons[2]:
                 def cos_loss(pred, target):
                     return (1 - (pred * target).sum(dim=1)).mean()
 
-                class PsiDataset(torch.utils.data.Dataset):
+                class PsiDataset(Dataset):
                     def __init__(self, items, tfm): self.items, self.tfm = items, tfm
                     def __len__(self): return len(self.items)
                     def __getitem__(self, i):
                         item = self.items[i]
-                        x = self.tfm(Image.open(item['filepath']).convert("L"))
+                        x = tfm(Image.open(item['filepath']).convert("L"))
                         y = torch.tensor([item['sin_psi'], item['cos_psi']], dtype=torch.float32)
                         return x, y
 
@@ -340,8 +353,6 @@ with col_buttons[3]:
             st.header("📋 분석 결과")
             results = st.session_state['analysis_results']
             
-            # 메트릭 계산을 위한 이진 분류 가정 (mm_from_name > 0.5)
-            # 이 부분은 실제 문제에 맞게 수정 필요
             y_true_binary = [1 if r['true_mm'] > 0.5 else 0 for r in results]
             y_pred_binary = [1 if r['predicted_psi_rad'] > math.pi else 0 for r in results]
 
@@ -372,11 +383,13 @@ with col_buttons[3]:
             fpr, tpr, _ = roc_curve(y_true_binary, y_scores)
             roc_auc = auc(fpr, tpr)
 
-            fig_roc, ax_roc = plt.subplots()
-            ax_roc.plot(fpr, tpr, color='blue', label=f'ROC curve (AUC = {roc_auc:.2f})')
-            ax_roc.plot([0, 1], [0, 1], color='gray', linestyle='--')
-            ax_roc.set_xlabel('False Positive Rate')
-            ax_roc.set_ylabel('True Positive Rate')
-            ax_roc.set_title('Receiver Operating Characteristic (ROC) Curve')
-            ax_roc.legend(loc="lower right")
-            st.pyplot(fig_roc)
+            fig_roc = go.Figure()
+            fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f'ROC curve (AUC = {roc_auc:.2f})'))
+            fig_roc.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode='lines', name='Random Guess', line=dict(dash='dash')))
+            fig_roc.update_layout(
+                title='Receiver Operating Characteristic (ROC) Curve',
+                xaxis_title='False Positive Rate',
+                yaxis_title='True Positive Rate',
+                showlegend=True
+            )
+            st.plotly_chart(fig_roc)
