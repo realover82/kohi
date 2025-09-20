@@ -21,14 +21,9 @@ import plotly.graph_objects as go
 import zipfile
 import shutil
 from torchsummary import summary
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as ReportLabImage
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
 import io
 from contextlib import redirect_stdout
 import pandas as pd
-import openpyxl
 
 # =========================================================
 # 기본 설정
@@ -41,19 +36,17 @@ if 'model' not in st.session_state:
     st.session_state['model'] = None
 if 'analysis_results' not in st.session_state:
     st.session_state['analysis_results'] = None
-if 'cm_fig_path' not in st.session_state:
-    st.session_state['cm_fig_path'] = None
-if 'roc_fig_path' not in st.session_state:
-    st.session_state['roc_fig_path'] = None
-if 'metrics' not in st.session_state:
-    st.session_state['metrics'] = {}
+if 'model_summary' not in st.session_state:
+    st.session_state['model_summary'] = None
+if 'finetune_preview' not in st.session_state:
+    st.session_state['finetune_preview'] = None
+if 'metrics_calculated' not in st.session_state:
+    st.session_state['metrics_calculated'] = False
 
 # 임시 파일 업로드 디렉토리
 UPLOAD_DIR = "uploaded_files"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-UPLOAD_DIR_TRAIN = os.path.join(UPLOAD_DIR, "train")
 UPLOAD_DIR_TEST = os.path.join(UPLOAD_DIR, "test")
-os.makedirs(UPLOAD_DIR_TRAIN, exist_ok=True)
 os.makedirs(UPLOAD_DIR_TEST, exist_ok=True)
 
 # 모델 및 데이터 저장 디렉토리
@@ -81,20 +74,6 @@ class AngleHead(nn.Module):
         y = self.backbone(x)
         return y / (y.norm(dim=1, keepdim=True) + 1e-8)
 
-class YOLOv5Model(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.dummy_fc = nn.Linear(1000, 2)
-    def forward(self, x):
-        return self.dummy_fc(torch.randn(x.size(0), 1000, device=x.device)) / 1000.0
-
-tfm = T.Compose([
-    T.Resize((224, 224)),
-    T.ToTensor(),
-    T.Lambda(lambda x: x.expand(3, -1, -1)),
-    T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-])
-
 def parse_mm_prefix(fp):
     name = os.path.basename(fp)
     m = re.match(r"^\D*?(\d{1,2})", name)
@@ -109,78 +88,14 @@ TWO_PI = 2.0 * math.pi
 def wrap_angle(x):
     return (x + TWO_PI) % TWO_PI
 
-# PsiDataset 클래스를 전역으로 분리
-class PsiDataset(Dataset):
-    def __init__(self, items, tfm):
-        self.items, self.tfm = items, tfm
-    def __len__(self): return len(self.items)
-    def __getitem__(self, i):
-        item = self.items[i]
-        
-        filename = os.path.basename(item['filepath'])
-        file_path = os.path.join(UPLOAD_DIR_TRAIN, filename) 
-        
-        if not os.path.isfile(file_path):
-            raise FileNotFoundError(f"파일을 찾을 수 없습니다: {file_path}. 업로드된 파일의 유효성을 확인해주세요.")
-
-        x = self.tfm(Image.open(file_path).convert("L"))
-        y = torch.tensor([item['sin_psi'], item['cos_psi']], dtype=torch.float32)
-        return x, y
-
-# PDF 리포트 생성 함수
-def create_pdf_report(filename, results, cm_fig_path, roc_fig_path):
-    doc = SimpleDocTemplate(filename, pagesize=letter)
-    styles = getSampleStyleSheet()
-    story = []
-
-    story.append(Paragraph("<b>다이얼 게이지 분석 보고서</b>", styles['Heading1']))
-    story.append(Spacer(1, 0.2 * inch))
-
-    story.append(Paragraph("<b>1. 성능 지표</b>", styles['Heading2']))
-    story.append(Spacer(1, 0.1 * inch))
-    
-    y_true_binary = [1 if r['true_mm'] > 0.5 else 0 for r in results]
-    y_pred_binary = [1 if r['predicted_psi_rad'] > math.pi else 0 for r in results]
-    accuracy = accuracy_score(y_true_binary, y_pred_binary)
-    precision = precision_score(y_true_binary, y_pred_binary, zero_division=0)
-    recall = recall_score(y_true_binary, y_pred_binary, zero_division=0)
-    f1 = f1_score(y_true_binary, y_pred_binary, zero_division=0)
-    
-    cm = confusion_matrix(y_true_binary, y_pred_binary)
-    if cm.shape == (2, 2):
-        tn, fp, fn, tp = cm.ravel()
-        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
-    else:
-        specificity = 0
-
-    story.append(Paragraph(f"Accuracy: {accuracy:.4f}", styles['Normal']))
-    story.append(Paragraph(f"Precision: {precision:.4f}", styles['Normal']))
-    story.append(Paragraph(f"Recall (Sensitivity): {recall:.4f}", styles['Normal']))
-    story.append(Paragraph(f"F1 Score: {f1:.4f}", styles['Normal']))
-    story.append(Paragraph(f"Specificity: {specificity:.4f}", styles['Normal']))
-    story.append(Spacer(1, 0.2 * inch))
-    
-    story.append(Paragraph("<b>2. 혼동 행렬 (Confusion Matrix)</b>", styles['Heading2']))
-    story.append(ReportLabImage(cm_fig_path, width=4*inch, height=4*inch))
-    story.append(Spacer(1, 0.2 * inch))
-
-    story.append(Paragraph("<b>3. ROC 곡선 (ROC Curve)</b>", styles['Heading2']))
-    story.append(ReportLabImage(roc_fig_path, width=4*inch, height=4*inch))
-
-    doc.build(story)
-
 # =========================================================
 # Streamlit UI
 # =========================================================
 st.sidebar.header("⚙️ 모델 설정")
-
 model_choice = st.sidebar.selectbox("모델 선택", ("ResNet-18 (AngleHead)", "YOLOv5 (예정)"))
-if model_choice == "YOLOv5 (예정)":
-    st.sidebar.warning("YOLOv5는 현재 더미 모델로 구현되어 있으며, 실제 기능은 없습니다.")
 
 load_mode = st.sidebar.radio("모델 가중치 로드", ("파인튜닝", "무작위 초기화"))
 
-# 파인튜닝 레이어 설정 목록 버튼
 st.sidebar.header("파인튜닝 설정")
 if st.session_state['model'] is not None:
     layer_names = [name for name, param in st.session_state['model'].named_parameters()]
@@ -193,21 +108,19 @@ else:
     finetune_layers_list = []
     st.sidebar.warning("모델을 로드하면 레이어 목록이 표시됩니다.")
 
-# 파인튜닝 설정 적용 버튼 (재학습 기능은 현재 없음)
-if st.button("파인튜닝 레이어 설정 적용"):
+if st.sidebar.button("파인튜닝 설정 적용"):
     if st.session_state['model'] is None:
-        st.warning("먼저 모델을 로드하거나 초기화해주세요.")
+        st.sidebar.warning("먼저 모델을 로드하거나 초기화해주세요.")
     else:
-        try:
-            for name, param in st.session_state['model'].named_parameters():
-                if name in finetune_layers_list:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False
-            st.success("파인튜닝 레이어 설정이 적용되었습니다.")
-            st.info("이 설정은 '분석 시작' 버튼에 반영됩니다.")
-        except Exception as e:
-            st.error(f"파인튜닝 설정 적용 중 오류 발생: {e}")
+        for name, param in st.session_state['model'].named_parameters():
+            if name in finetune_layers_list:
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
+        st.session_state['finetune_preview'] = {
+            'trainable_layers': [name for name, param in st.session_state['model'].named_parameters() if param.requires_grad]
+        }
+        st.sidebar.success("파인튜닝 레이어 설정이 적용되었습니다.")
 
 st.sidebar.text("")
 
@@ -253,33 +166,37 @@ if st.session_state['model'] is None:
 # =========================================================
 st.header("🚀 성능 테스트 실행")
 
-# 모델 구조 보기 버튼
+# 모델 구조 보기
 if st.button("모델 구조 보기"):
     st.info("모델 구조를 분석 중입니다...")
     try:
-        if st.session_state['model'] is None:
-            st.warning("모델이 로드되지 않았습니다.")
-        else:
-            buffer = io.StringIO()
-            with redirect_stdout(buffer):
-                summary(st.session_state['model'], (3, 224, 224), device=str(device))
-            st.subheader("모델 구조 상세")
-            st.code(buffer.getvalue())
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            summary(st.session_state['model'], (3, 224, 224), device=str(device))
+        st.session_state['model_summary'] = buffer.getvalue()
+        st.success("모델 구조 분석 완료!")
     except Exception as e:
         st.error(f"모델 구조 분석 중 오류 발생: {e}")
 
-# 파인튜닝 레이어 설정 미리보기 버튼
+if st.session_state['model_summary']:
+    st.subheader("모델 구조 상세")
+    st.code(st.session_state['model_summary'])
+
+# 파인튜닝 레이어 미리보기
 if st.button("파인튜닝 레이어 미리보기"):
-    st.subheader("파인튜닝 설정 미리보기")
-    st.write("파인튜닝에 사용될 레이어:")
+    st.info("파인튜닝 레이어 설정을 미리보기 합니다...")
     if st.session_state['model']:
+        preview_text = "파인튜닝에 사용될 레이어:\n"
         for name, param in st.session_state['model'].named_parameters():
-            if param.requires_grad:
-                st.write(f"- {name} (학습 가능)")
-            else:
-                st.write(f"- {name} (고정)")
+            preview_text += f"- {name} ({'학습 가능' if param.requires_grad else '고정'})\n"
+        st.session_state['finetune_preview'] = preview_text
+        st.success("미리보기 완료!")
     else:
         st.warning("먼저 모델을 로드하거나 초기화해주세요.")
+
+if st.session_state['finetune_preview']:
+    st.subheader("파인튜닝 설정 미리보기")
+    st.text(st.session_state['finetune_preview'])
 
 if st.button("분석 시작"):
     image_extensions = ['*.png', '*.jpg', '*.jpeg']
@@ -291,13 +208,11 @@ if st.button("분석 시작"):
         st.warning("분석을 시작하려면 테스트용 이미지를 먼저 업로드해주세요.")
     else:
         st.info("테스트 이미지 분석을 시작합니다. 잠시만 기다려주세요...")
-        
         try:
             zero_model = st.session_state['model']
             if zero_model is None:
                 st.error("모델이 로드되지 않았습니다. 페이지를 새로고침하거나 모델을 로드해주세요.")
                 st.stop()
-
             zero_model.eval()
             results = []
             for fp in test_files:
@@ -305,89 +220,74 @@ if st.button("분석 시작"):
                 if mm_from_name is None: 
                     st.warning(f"파일명에서 mm 값을 파싱할 수 없습니다: {os.path.basename(fp)}. 이 파일은 분석에서 제외됩니다.")
                     continue
-                
                 with torch.no_grad():
                     x = tfm(Image.open(fp).convert("L")).unsqueeze(0).to(device)
                     y = zero_model(x)[0].cpu().numpy()
-                
                 psi_pred = wrap_angle(math.atan2(float(y[0]), float(y[1])))
-                
                 results.append({
                     "filepath": fp,
                     "predicted_psi_rad": psi_pred,
                     "true_mm": mm_from_name
                 })
-            
-            if not results:
-                st.error("분석할 유효한 파일이 없습니다. 파일명 형식을 확인해주세요.")
-                st.stop()
-
             st.session_state['analysis_results'] = results
-            st.session_state['load_mode'] = load_mode
-            st.session_state['model_choice'] = model_choice
-            st.success("분석 완료! '분석 결과 보기' 버튼을 눌러 확인하세요.")
-        
+            st.success("분석 완료!")
         except Exception as e:
             st.error(f"분석 중 오류 발생: {e}")
 
-if st.button("분석 결과 보기"):
-    if 'analysis_results' not in st.session_state:
-        st.warning("분석을 먼저 시작해야 결과를 볼 수 있습니다.")
-    else:
-        st.header(f"📋 분석 결과 ({st.session_state.get('model_choice', '모델')} - {st.session_state.get('load_mode', '모드')})")
-        results = st.session_state['analysis_results']
-        
-        y_true_binary = [1 if r['true_mm'] > 0.5 else 0 for r in results]
-        y_pred_binary = [1 if r['predicted_psi_rad'] > math.pi else 0 for r in results]
+if st.session_state['analysis_results']:
+    st.header(f"📋 분석 결과")
+    results = st.session_state['analysis_results']
+    y_true_binary = [1 if r['true_mm'] > 0.5 else 0 for r in results]
+    y_pred_binary = [1 if r['predicted_psi_rad'] > math.pi else 0 for r in results]
 
-        st.subheader("혼동 행렬 (Confusion Matrix)")
-        cm = confusion_matrix(y_true_binary, y_pred_binary)
-        
-        if cm.shape == (2, 2):
-            tn, fp, fn, tp = cm.ravel()
-        elif cm.shape == (1, 1):
-            if y_true_binary[0] == 1:
-                tn, fp, fn, tp = 0, 0, 0, cm[0][0]
-            else:
-                tn, fp, fn, tp = cm[0][0], 0, 0, 0
+    st.subheader("혼동 행렬 (Confusion Matrix)")
+    cm = confusion_matrix(y_true_binary, y_pred_binary)
+    if cm.shape == (2, 2):
+        tn, fp, fn, tp = cm.ravel()
+    elif cm.shape == (1, 1):
+        if y_true_binary[0] == 1:
+            tn, fp, fn, tp = 0, 0, 0, cm[0][0]
         else:
-            tn, fp, fn, tp = 0, 0, 0, 0
-            st.warning("혼동 행렬의 크기가 예상과 다릅니다. 성능 지표를 계산할 수 없습니다.")
-        
-        fig_cm, ax_cm = plt.subplots()
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax_cm)
-        ax_cm.set_xlabel('Predicted')
-        ax_cm.set_ylabel('True')
-        st.pyplot(fig_cm)
-        
-        st.subheader("성능 지표")
-        accuracy = accuracy_score(y_true_binary, y_pred_binary)
-        precision = precision_score(y_true_binary, y_pred_binary, zero_division=0)
-        recall = recall_score(y_true_binary, y_pred_binary, zero_division=0)
-        f1 = f1_score(y_true_binary, y_pred_binary, zero_division=0)
-        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+            tn, fp, fn, tp = cm[0][0], 0, 0, 0
+    else:
+        tn, fp, fn, tp = 0, 0, 0, 0
+        st.warning("혼동 행렬의 크기가 예상과 다릅니다. 성능 지표를 계산할 수 없습니다.")
+    fig_cm, ax_cm = plt.subplots()
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax_cm)
+    ax_cm.set_xlabel('Predicted')
+    ax_cm.set_ylabel('True')
+    st.pyplot(fig_cm)
+    
+    st.subheader("성능 지표")
+    accuracy = accuracy_score(y_true_binary, y_pred_binary)
+    precision = precision_score(y_true_binary, y_pred_binary, zero_division=0)
+    recall = recall_score(y_true_binary, y_pred_binary, zero_division=0)
+    f1 = f1_score(y_true_binary, y_pred_binary, zero_division=0)
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+    st.session_state['metrics'] = {
+        'accuracy': accuracy, 'precision': precision, 'recall': recall,
+        'f1': f1, 'specificity': specificity
+    }
+    st.write(f"**Accuracy:** {accuracy:.4f}")
+    st.write(f"**Precision:** {precision:.4f}")
+    st.write(f"**Recall (Sensitivity):** {recall:.4f}")
+    st.write(f"**F1 Score:** {f1:.4f}")
+    st.write(f"**Specificity:** {specificity:.4f}")
 
-        st.write(f"**Accuracy:** {accuracy:.4f}")
-        st.write(f"**Precision:** {precision:.4f}")
-        st.write(f"**Recall (Sensitivity):** {recall:.4f}")
-        st.write(f"**F1 Score:** {f1:.4f}")
-        st.write(f"**Specificity:** {specificity:.4f}")
-
-        st.subheader("ROC 곡선 및 AUC")
-        y_scores = [r['predicted_psi_rad'] / TWO_PI for r in results]
-        fpr, tpr, _ = roc_curve(y_true_binary, y_scores)
-        roc_auc = auc(fpr, tpr)
-
-        fig_roc = go.Figure()
-        fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f'ROC curve (AUC = {roc_auc:.2f})'))
-        fig_roc.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode='lines', name='Random Guess', line=dict(dash='dash')))
-        fig_roc.update_layout(
-            title='Receiver Operating Characteristic (ROC) Curve',
-            xaxis_title='False Positive Rate',
-            yaxis_title='True Positive Rate',
-            showlegend=True
-        )
-        st.plotly_chart(fig_roc)
+    st.subheader("ROC 곡선 및 AUC")
+    y_scores = [r['predicted_psi_rad'] / TWO_PI for r in results]
+    fpr, tpr, _ = roc_curve(y_true_binary, y_scores)
+    roc_auc = auc(fpr, tpr)
+    fig_roc = go.Figure()
+    fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f'ROC curve (AUC = {roc_auc:.2f})'))
+    fig_roc.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode='lines', name='Random Guess', line=dict(dash='dash')))
+    fig_roc.update_layout(
+        title='Receiver Operating Characteristic (ROC) Curve',
+        xaxis_title='False Positive Rate',
+        yaxis_title='True Positive Rate',
+        showlegend=True
+    )
+    st.plotly_chart(fig_roc)
 
 if st.button("초기화"):
     for file in glob.glob(os.path.join(UPLOAD_DIR_TEST, "*")):
@@ -426,37 +326,24 @@ if st.button("변형된 모델 저장"):
 
 st.markdown("---")
 st.subheader("분석 결과 다운로드")
-if st.button("분석결과 PDF 다운로드"):
+if st.button("분석결과 엑셀 다운로드"):
     if st.session_state['analysis_results'] is None:
         st.warning("분석 결과를 먼저 생성해야 합니다.")
     else:
-        st.info("PDF 보고서를 생성합니다.")
+        results_df = pd.DataFrame(st.session_state['analysis_results'])
         
-        cm_fig, ax_cm = plt.subplots()
-        cm = confusion_matrix(
-            [1 if r['true_mm'] > 0.5 else 0 for r in st.session_state['analysis_results']],
-            [1 if r['predicted_psi_rad'] > math.pi else 0 for r in st.session_state['analysis_results']]
-        )
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax_cm)
-        cm_fig.savefig("cm_temp.png")
-
-        y_true_binary = [1 if r['true_mm'] > 0.5 else 0 for r in st.session_state['analysis_results']]
-        y_scores = [r['predicted_psi_rad'] / TWO_PI for r in st.session_state['analysis_results']]
-        fpr, tpr, _ = roc_curve(y_true_binary, y_scores)
-        roc_auc = auc(fpr, tpr)
-        fig_roc = go.Figure()
-        fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f'ROC curve (AUC = {roc_auc:.2f})'))
-        fig_roc.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode='lines', name='Random Guess', line=dict(dash='dash')))
-        fig_roc.update_layout(title='ROC Curve')
-        fig_roc.write_image("roc_temp.png")
+        # 성능 지표도 함께 저장
+        metrics_df = pd.DataFrame([st.session_state['metrics']])
         
-        pdf_buffer = io.BytesIO()
-        create_pdf_report(pdf_buffer, st.session_state['analysis_results'], "cm_temp.png", "roc_temp.png")
-        pdf_buffer.seek(0)
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            results_df.to_excel(writer, sheet_name='Analysis_Results', index=False)
+            metrics_df.to_excel(writer, sheet_name='Metrics', index=False)
+        buffer.seek(0)
         
         st.download_button(
-            label="PDF 보고서 다운로드",
-            data=pdf_buffer,
-            file_name="analysis_report.pdf",
-            mime="application/pdf"
+            label="엑셀 파일 다운로드",
+            data=buffer,
+            file_name="analysis_report.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
