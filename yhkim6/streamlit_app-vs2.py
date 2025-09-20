@@ -9,18 +9,19 @@ import random
 import time
 import json
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
+from skimage.transform import rotate as sk_rotate
+from skimage.util import img_as_ubyte
+from skimage import exposure
+from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score, roc_curve, auc
+import matplotlib.pyplot as plt
+import seaborn as sns
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as T
 import torchvision.models as tvm
-from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score, roc_curve, auc
-import matplotlib.pyplot as plt
-import seaborn as sns
 import plotly.graph_objects as go
-import zipfile
-import shutil
 
 # =========================================================
 # 기본 설정
@@ -29,10 +30,8 @@ st.set_page_config(layout="wide")
 st.title("다이얼 게이지 자동 분석 애플리케이션 📊")
 
 # 임시 파일 업로드 디렉토리
-UPLOAD_DIR = "uploaded_files"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-UPLOAD_DIR_TRAIN = os.path.join(UPLOAD_DIR, "train")
-UPLOAD_DIR_TEST = os.path.join(UPLOAD_DIR, "test")
+UPLOAD_DIR_TRAIN = "uploaded_train_images"
+UPLOAD_DIR_TEST = "uploaded_test_images"
 os.makedirs(UPLOAD_DIR_TRAIN, exist_ok=True)
 os.makedirs(UPLOAD_DIR_TEST, exist_ok=True)
 
@@ -52,6 +51,7 @@ st.sidebar.info(f"사용 중인 장치: {device}")
 # 모델 및 유틸리티 함수 정의
 # =========================================================
 
+# AngleHead 모델 구조 (ResNet-18 기반)
 class AngleHead(nn.Module):
     def __init__(self, pretrained=True):
         super().__init__()
@@ -63,6 +63,7 @@ class AngleHead(nn.Module):
         y = self.backbone(x)
         return y / (y.norm(dim=1, keepdim=True) + 1e-8)
 
+# YOLOv5 모델 (가정)
 class YOLOv5Model(nn.Module):
     def __init__(self):
         super().__init__()
@@ -70,6 +71,7 @@ class YOLOv5Model(nn.Module):
     def forward(self, x):
         return self.dummy_fc(torch.randn(x.size(0), 1000, device=x.device)) / 1000.0
 
+# 공통 이미지 변환
 tfm = T.Compose([
     T.Resize((224, 224)),
     T.ToTensor(),
@@ -77,6 +79,7 @@ tfm = T.Compose([
     T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
 ])
 
+# 파일명에서 mm 값 파싱
 def parse_mm_prefix(fp):
     name = os.path.basename(fp)
     m = re.match(r"^\D*?(\d{2})", name)
@@ -87,27 +90,48 @@ def parse_mm_prefix(fp):
         return v / 100.0
     return None
 
+# 각도 계산 유틸리티
 TWO_PI = 2.0 * math.pi
 def wrap_angle(x):
     return (x + TWO_PI) % TWO_PI
+
+# draw_arrow 함수를 Pillow 기반으로 재작성
+def draw_arrow(pil_img, theta_deg, color, text):
+    draw = ImageDraw.Draw(pil_img)
+    w, h = pil_img.size
+    cx, cy = w // 2, h // 2
+    R = int(min(w, h) * 0.45)
+    
+    # 각도 계산 (12시=0°, 시계방향)
+    th_rad = math.radians(theta_deg)
+    x2 = int(round(cx + math.sin(th_rad) * R))
+    y2 = int(round(cy - math.cos(th_rad) * R))
+
+    # 화살표 그리기 (단순 선으로 대체)
+    draw.line([(cx, cy), (x2, y2)], fill=color, width=2)
+    
+    # 텍스트 그리기
+    font = ImageFont.truetype("Arial.ttf", 20)
+    draw.text((10, 10), text, fill=color, font=font)
+    
+    return pil_img
 
 # =========================================================
 # Streamlit UI
 # =========================================================
 st.sidebar.header("⚙️ 모델 설정")
 
+# 모델 선택
 model_choice = st.sidebar.selectbox("모델 선택", ("ResNet-18 (AngleHead)", "YOLOv5 (예정)"))
 if model_choice == "YOLOv5 (예정)":
     st.sidebar.warning("YOLOv5는 현재 더미 모델로 구현되어 있으며, 실제 기능은 없습니다.")
 
+# 가중치 선택
 weights_choice = st.sidebar.selectbox("가중치", ("사전 학습 가중치 적용", "스크래치(무작위) 가중치"))
 
+# 학습 Epoch 입력
 epochs = st.sidebar.number_input("학습 Epoch", min_value=1, value=1, step=1)
 st.sidebar.text("")
-
-# 학습 모드 선택
-st.sidebar.header("📚 학습 모드 선택")
-train_mode = st.sidebar.radio("학습 방식", ("처음부터 학습", "이어서 학습"))
 
 # =========================================================
 # 파일 업로드 섹션
@@ -115,41 +139,37 @@ train_mode = st.sidebar.radio("학습 방식", ("처음부터 학습", "이어�
 st.header("📂 데이터 업로드")
 st.markdown("학습 및 테스트에 사용할 다이얼 게이지 이미지를 업로드하세요. 파일명은 `00-sample.png` 형식으로 `mm` 값이 포함되어야 합니다.")
 
-col_upload_files, col_upload_folders = st.columns(2)
+col1, col2 = st.columns(2)
 
-with col_upload_files:
-    st.subheader("개별 파일 업로드")
-    uploaded_train_files = st.file_uploader("학습용 이미지 업로드", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key="train_uploader")
+with col1:
+    st.subheader("학습용 이미지 업로드")
+    uploaded_train_files = st.file_uploader(
+        "train 폴더에 업로드할 이미지(.png, .jpg)",
+        type=["png", "jpg", "jpeg"],
+        accept_multiple_files=True,
+        key="train_uploader"
+    )
     if uploaded_train_files:
         for uploaded_file in uploaded_train_files:
             file_path = os.path.join(UPLOAD_DIR_TRAIN, uploaded_file.name)
             with open(file_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
         st.success(f"{len(uploaded_train_files)}개의 학습용 이미지 업로드 완료.")
-        
-    uploaded_test_files = st.file_uploader("테스트용 이미지 업로드", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key="test_uploader")
+
+with col2:
+    st.subheader("테스트용 이미지 업로드")
+    uploaded_test_files = st.file_uploader(
+        "test 폴더에 업로드할 이미지(.png, .jpg)",
+        type=["png", "jpg", "jpeg"],
+        accept_multiple_files=True,
+        key="test_uploader"
+    )
     if uploaded_test_files:
         for uploaded_file in uploaded_test_files:
             file_path = os.path.join(UPLOAD_DIR_TEST, uploaded_file.name)
             with open(file_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
         st.success(f"{len(uploaded_test_files)}개의 테스트용 이미지 업로드 완료.")
-
-    if train_mode == "이어서 학습":
-        st.subheader("모델 및 데이터 재활용")
-        uploaded_best_pth = st.file_uploader("best.pth 파일 업로드", type=["pth"], key="pth_uploader")
-        if uploaded_best_pth:
-            best_pth_path = os.path.join(CKPT_DIR_ZERO, "best.pth")
-            with open(best_pth_path, "wb") as f:
-                f.write(uploaded_best_pth.getbuffer())
-            st.success("best.pth 파일 업로드 완료.")
-            
-        uploaded_pseudo_csv = st.file_uploader("pseudo_psi_train.csv 파일 업로드", type=["csv"], key="csv_uploader")
-        if uploaded_pseudo_csv:
-            pseudo_csv_path = os.path.join(DATA_DIR, "pseudo_zero_labels.csv")
-            with open(pseudo_csv_path, "wb") as f:
-                f.write(uploaded_pseudo_csv.getbuffer())
-            st.success("pseudo_psi_train.csv 파일 업로드 완료.")
 
 # =========================================================
 # 기능 버튼
@@ -160,7 +180,7 @@ col_buttons = st.columns(4)
 
 with col_buttons[0]:
     if st.button("분석 시작"):
-        if not glob.glob(os.path.join(UPLOAD_DIR_TEST, "*.png")):
+        if not uploaded_test_files:
             st.warning("분석을 시작하려면 테스트용 이미지를 먼저 업로드해주세요.")
         else:
             st.info("테스트 이미지 분석을 시작합니다. 잠시만 기다려주세요...")
@@ -178,7 +198,9 @@ with col_buttons[0]:
                 results = []
                 for fp in glob.glob(os.path.join(UPLOAD_DIR_TEST, "*.png")):
                     mm_from_name = parse_mm_prefix(fp)
-                    if mm_from_name is None: continue
+                    if mm_from_name is None:
+                        st.warning(f"파일명에서 mm 값을 파싱할 수 없습니다: {os.path.basename(fp)}. 이 파일은 무시됩니다.")
+                        continue
                         
                     with torch.no_grad():
                         x = tfm(Image.open(fp).convert("L")).unsqueeze(0).to(device)
@@ -215,20 +237,20 @@ with col_buttons[1]:
 
 with col_buttons[2]:
     if st.button("학습 시작"):
-        if train_mode == "처음부터 학습" and not glob.glob(os.path.join(UPLOAD_DIR_TRAIN, "*.png")):
-            st.warning("처음부터 학습을 시작하려면 학습용 이미지를 먼저 업로드해주세요.")
-            st.stop()
-        
-        st.info(f"선택한 설정으로 모델 학습을 시작합니다. (Epoch: {epochs})")
-        
-        try:
-            pseudo_csv_path = os.path.join(DATA_DIR, "pseudo_zero_labels.csv")
-
-            if train_mode == "처음부터 학습":
+        if not uploaded_train_files:
+            st.warning("학습을 시작하려면 학습용 이미지를 먼저 업로드해주세요.")
+        else:
+            st.info(f"선택한 설정으로 모델 학습을 시작합니다. (Epoch: {epochs})")
+            
+            try:
                 st.info("1단계: Pseudo 라벨 생성 중...")
                 theta_model = AngleHead(pretrained=True).to(device)
+                
                 if os.path.isfile(os.path.join(CKPT_DIR_THETA, "best.pth")):
                     theta_model.load_state_dict(torch.load(os.path.join(CKPT_DIR_THETA, "best.pth"), map_location=device))
+                else:
+                    st.warning("θ 모델(FixB_180) 가중치를 찾을 수 없습니다. 새로운 θ 모델을 학습합니다.")
+                
                 theta_model.eval()
                 
                 rows = []
@@ -243,96 +265,85 @@ with col_buttons[2]:
                     psi = wrap_angle(th - delta_label)
                     rows.append({"filepath": fp, "psi_rad": psi, "sin_psi": math.sin(psi), "cos_psi": math.cos(psi)})
                 
-                with open(pseudo_csv_path, "w", newline="", encoding="utf-8") as f:
+                with open(os.path.join(DATA_DIR, "pseudo_zero_labels.csv"), "w", newline="", encoding="utf-8") as f:
                     writer = csv.DictWriter(f, fieldnames=rows[0].keys())
                     writer.writeheader()
                     writer.writerows(rows)
                 
                 st.success("Pseudo 라벨 생성 완료.")
 
-            elif train_mode == "이어서 학습":
-                if not os.path.isfile(pseudo_csv_path):
-                    st.error("이어서 학습하려면 'pseudo_psi_train.csv' 파일을 먼저 업로드해야 합니다.")
-                    st.stop()
-                st.info("이어서 학습 모드가 선택되었습니다. 기존 pseudo_psi_train.csv 파일을 사용합니다.")
-            
-            # 2. ZeroHead 모델 학습
-            st.info("2단계: ZeroHead 모델 학습 중...")
-            if model_choice == "ResNet-18 (AngleHead)":
-                model = AngleHead(pretrained=(weights_choice == "사전 학습 가중치 적용")).to(device)
-            else:
-                model = YOLOv5Model().to(device)
-                st.warning("YOLOv5는 현재 더미 모델입니다.")
-
-            if train_mode == "이어서 학습" and os.path.isfile(os.path.join(CKPT_DIR_ZERO, "best.pth")):
-                model.load_state_dict(torch.load(os.path.join(CKPT_DIR_ZERO, "best.pth"), map_location=device))
-                st.info("이어서 학습: 기존 best.pth 가중치를 로드했습니다.")
-            
-            opt = torch.optim.AdamW(model.parameters(), lr=1e-4)
-
-            def cos_loss(pred, target):
-                return (1 - (pred * target).sum(dim=1)).mean()
-
-            class PsiDataset(Dataset):
-                def __init__(self, items, tfm): self.items, self.tfm = items, tfm
-                def __len__(self): return len(self.items)
-                def __getitem__(self, i):
-                    item = self.items[i]
-                    x = tfm(Image.open(item['filepath']).convert("L"))
-                    y = torch.tensor([item['sin_psi'], item['cos_psi']], dtype=torch.float32)
-                    return x, y
-
-            with open(pseudo_csv_path, "r", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                items = [{"filepath": r["filepath"], "sin_psi": float(r["sin_psi"]), "cos_psi": float(r["cos_psi"])} for r in reader]
-
-            random.shuffle(items)
-            split = int(len(items) * 0.9)
-            train_items, val_items = items[:split], items[split:]
-            
-            ds_tr = PsiDataset(train_items, tfm)
-            ds_va = PsiDataset(val_items, tfm)
-            dl_tr = DataLoader(ds_tr, batch_size=32, shuffle=True, num_workers=0, pin_memory=True)
-            dl_va = DataLoader(ds_va, batch_size=64, shuffle=False, num_workers=0, pin_memory=True)
-            
-            train_losses, val_losses = [], []
-            best_loss = float('inf')
-
-            for ep in range(epochs):
-                model.train()
-                tr_loss = 0
-                for x, y in dl_tr:
-                    x, y = x.to(device), y.to(device)
-                    p = model(x)
-                    loss = cos_loss(p, y)
-                    opt.zero_grad()
-                    loss.backward()
-                    opt.step()
-                    tr_loss += loss.item() * x.size(0)
-                train_losses.append(tr_loss / len(ds_tr))
+                st.info("2단계: ZeroHead 모델 학습 중...")
+                if model_choice == "ResNet-18 (AngleHead)":
+                    model = AngleHead(pretrained=(weights_choice == "사전 학습 가중치 적용")).to(device)
+                else:
+                    model = YOLOv5Model().to(device)
+                    st.warning("YOLOv5는 현재 더미 모델입니다.")
                 
-                model.eval()
-                va_loss = 0
-                with torch.no_grad():
-                    for x, y in dl_va:
+                opt = torch.optim.AdamW(model.parameters(), lr=1e-4)
+
+                def cos_loss(pred, target):
+                    return (1 - (pred * target).sum(dim=1)).mean()
+
+                class PsiDataset(Dataset):
+                    def __init__(self, items, tfm): self.items, self.tfm = items, tfm
+                    def __len__(self): return len(self.items)
+                    def __getitem__(self, i):
+                        item = self.items[i]
+                        x = tfm(Image.open(item['filepath']).convert("L"))
+                        y = torch.tensor([item['sin_psi'], item['cos_psi']], dtype=torch.float32)
+                        return x, y
+
+                with open(os.path.join(DATA_DIR, "pseudo_zero_labels.csv"), "r", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    items = [{"filepath": r["filepath"], "sin_psi": float(r["sin_psi"]), "cos_psi": float(r["cos_psi"])} for r in reader]
+
+                random.shuffle(items)
+                split = int(len(items) * 0.9)
+                train_items, val_items = items[:split], items[split:]
+                
+                ds_tr = PsiDataset(train_items, tfm)
+                ds_va = PsiDataset(val_items, tfm)
+                dl_tr = DataLoader(ds_tr, batch_size=32, shuffle=True, num_workers=0, pin_memory=True)
+                dl_va = DataLoader(ds_va, batch_size=64, shuffle=False, num_workers=0, pin_memory=True)
+                
+                train_losses, val_losses = [], []
+                best_loss = float('inf')
+
+                for ep in range(epochs):
+                    model.train()
+                    tr_loss = 0
+                    for x, y in dl_tr:
                         x, y = x.to(device), y.to(device)
                         p = model(x)
                         loss = cos_loss(p, y)
-                        va_loss += loss.item() * x.size(0)
-                val_losses.append(va_loss / len(ds_va))
+                        opt.zero_grad()
+                        loss.backward()
+                        opt.step()
+                        tr_loss += loss.item() * x.size(0)
+                    train_losses.append(tr_loss / len(ds_tr))
+                    
+                    model.eval()
+                    va_loss = 0
+                    with torch.no_grad():
+                        for x, y in dl_va:
+                            x, y = x.to(device), y.to(device)
+                            p = model(x)
+                            loss = cos_loss(p, y)
+                            va_loss += loss.item() * x.size(0)
+                    val_losses.append(va_loss / len(ds_va))
+                    
+                    st.text(f"Epoch [{ep+1}/{epochs}] - Train Loss: {train_losses[-1]:.4f} | Val Loss: {val_losses[-1]:.4f}")
+                    
+                    if val_losses[-1] < best_loss:
+                        best_loss = val_losses[-1]
+                        torch.save(model.state_dict(), os.path.join(CKPT_DIR_ZERO, "best.pth"))
                 
-                st.text(f"Epoch [{ep+1}/{epochs}] - Train Loss: {train_losses[-1]:.4f} | Val Loss: {val_losses[-1]:.4f}")
-                
-                if val_losses[-1] < best_loss:
-                    best_loss = val_losses[-1]
-                    torch.save(model.state_dict(), os.path.join(CKPT_DIR_ZERO, "best.pth"))
+                st.session_state['train_losses'] = train_losses
+                st.session_state['val_losses'] = val_losses
+                st.success("ZeroHead 모델 학습 완료! 가중치가 저장되었습니다.")
             
-            st.session_state['train_losses'] = train_losses
-            st.session_state['val_losses'] = val_losses
-            st.success("ZeroHead 모델 학습 완료! 가중치가 저장되었습니다.")
-        
-        except Exception as e:
-            st.error(f"학습 중 오류 발생: {e}")
+            except Exception as e:
+                st.error(f"학습 중 오류 발생: {e}")
 
 with col_buttons[3]:
     if st.button("분석 결과 보기"):
