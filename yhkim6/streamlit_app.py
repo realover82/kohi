@@ -31,7 +31,9 @@ st.title("다이얼 게이지 자동 분석 애플리케이션 📊")
 # 임시 파일 업로드 디렉토리
 UPLOAD_DIR = "uploaded_files"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+UPLOAD_DIR_TRAIN = os.path.join(UPLOAD_DIR, "train")
 UPLOAD_DIR_TEST = os.path.join(UPLOAD_DIR, "test")
+os.makedirs(UPLOAD_DIR_TRAIN, exist_ok=True)
 os.makedirs(UPLOAD_DIR_TEST, exist_ok=True)
 
 # 모델 및 데이터 저장 디렉토리
@@ -75,7 +77,6 @@ tfm = T.Compose([
 
 def parse_mm_prefix(fp):
     name = os.path.basename(fp)
-    # 수정된 정규식: "0-" 또는 "00-" 형태를 모두 인식
     m = re.match(r"^\D*?(\d{1,2})", name)
     if not m:
         return None
@@ -132,7 +133,12 @@ if load_mode == "파인튜닝":
 st.header("🚀 성능 테스트 실행")
 
 if st.button("분석 시작"):
-    if not glob.glob(os.path.join(UPLOAD_DIR_TEST, "*.png")):
+    image_extensions = ['*.png', '*.jpg', '*.jpeg']
+    test_files = []
+    for ext in image_extensions:
+        test_files.extend(glob.glob(os.path.join(UPLOAD_DIR_TEST, ext)))
+
+    if not test_files:
         st.warning("분석을 시작하려면 테스트용 이미지를 먼저 업로드해주세요.")
     else:
         st.info("테스트 이미지 분석을 시작합니다. 잠시만 기다려주세요...")
@@ -154,7 +160,7 @@ if st.button("분석 시작"):
 
             zero_model.eval()
             results = []
-            for fp in glob.glob(os.path.join(UPLOAD_DIR_TEST, "*.png")):
+            for fp in test_files:
                 mm_from_name = parse_mm_prefix(fp)
                 if mm_from_name is None: 
                     st.warning(f"파일명에서 mm 값을 파싱할 수 없습니다: {os.path.basename(fp)}. 이 파일은 분석에서 제외됩니다.")
@@ -256,7 +262,7 @@ if st.button("취소"):
     if os.path.exists(os.path.join(CKPT_DIR_ZERO, "best.pth")):
         os.remove(os.path.join(CKPT_DIR_ZERO, "best.pth"))
     
-    st.experimental_rerun()
+    st.rerun()
     st.success("앱 상태가 초기화되었습니다.")
 
 st.markdown("---")
