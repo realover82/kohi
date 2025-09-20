@@ -5,3 +5,10 @@ requests
 gdown
 plotly
 openpyxl
+torch
+torchvision
+numpy
+Pillow
+scikit-learn
+seaborn
+opencv-python
