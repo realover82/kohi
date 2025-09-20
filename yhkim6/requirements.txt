@@ -13,3 +13,5 @@ scikit-learn
 seaborn
 opencv-contrib-python
 scikit-image
+torchsummary
+reportlab

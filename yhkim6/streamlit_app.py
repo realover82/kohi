@@ -22,6 +22,10 @@ import plotly.graph_objects as go
 import zipfile
 import shutil
 from torchsummary import summary
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as ReportLabImage
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
 
 # =========================================================
 # 기본 설정
@@ -90,6 +94,71 @@ TWO_PI = 2.0 * math.pi
 def wrap_angle(x):
     return (x + TWO_PI) % TWO_PI
 
+# PsiDataset 클래스를 전역으로 분리
+class PsiDataset(Dataset):
+    def __init__(self, items, tfm):
+        self.items, self.tfm = items, tfm
+    def __len__(self): return len(self.items)
+    def __getitem__(self, i):
+        item = self.items[i]
+        
+        filename = os.path.basename(item['filepath'])
+        file_path = os.path.join(UPLOAD_DIR_TRAIN, filename) 
+        
+        if not os.path.isfile(file_path):
+            raise FileNotFoundError(f"파일을 찾을 수 없습니다: {file_path}. 업로드된 파일의 유효성을 확인해주세요.")
+
+        x = self.tfm(Image.open(file_path).convert("L"))
+        y = torch.tensor([item['sin_psi'], item['cos_psi']], dtype=torch.float32)
+        return x, y
+
+# PDF 리포트 생성 함수
+def create_pdf_report(filename, results, cm_fig, roc_fig_path):
+    doc = SimpleDocTemplate(filename, pagesize=letter)
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph("<b>다이얼 게이지 분석 보고서</b>", styles['Heading1']))
+    story.append(Spacer(1, 0.2 * inch))
+
+    # 성능 지표 추가
+    story.append(Paragraph("<b>1. 성능 지표</b>", styles['Heading2']))
+    story.append(Spacer(1, 0.1 * inch))
+    
+    y_true_binary = [1 if r['true_mm'] > 0.5 else 0 for r in results]
+    y_pred_binary = [1 if r['predicted_psi_rad'] > math.pi else 0 for r in results]
+    accuracy = accuracy_score(y_true_binary, y_pred_binary)
+    precision = precision_score(y_true_binary, y_pred_binary, zero_division=0)
+    recall = recall_score(y_true_binary, y_pred_binary, zero_division=0)
+    f1 = f1_score(y_true_binary, y_pred_binary, zero_division=0)
+    
+    cm = confusion_matrix(y_true_binary, y_pred_binary)
+    if cm.shape == (2, 2):
+        tn, fp, fn, tp = cm.ravel()
+        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+    else:
+        specificity = 0
+
+    story.append(Paragraph(f"Accuracy: {accuracy:.4f}", styles['Normal']))
+    story.append(Paragraph(f"Precision: {precision:.4f}", styles['Normal']))
+    story.append(Paragraph(f"Recall (Sensitivity): {recall:.4f}", styles['Normal']))
+    story.append(Paragraph(f"F1 Score: {f1:.4f}", styles['Normal']))
+    story.append(Paragraph(f"Specificity: {specificity:.4f}", styles['Normal']))
+    story.append(Spacer(1, 0.2 * inch))
+    
+    # 혼동 행렬 이미지 추가
+    story.append(Paragraph("<b>2. 혼동 행렬 (Confusion Matrix)</b>", styles['Heading2']))
+    cm_img_path = "cm_temp.png"
+    cm_fig.savefig(cm_img_path)
+    story.append(ReportLabImage(cm_img_path, width=4*inch, height=4*inch))
+    story.append(Spacer(1, 0.2 * inch))
+
+    # ROC 곡선 이미지 추가
+    story.append(Paragraph("<b>3. ROC 곡선 (ROC Curve)</b>", styles['Heading2']))
+    story.append(ReportLabImage(roc_fig_path, width=4*inch, height=4*inch))
+
+    doc.build(story)
+    
 # =========================================================
 # Streamlit UI
 # =========================================================
@@ -143,17 +212,11 @@ if st.button("모델 구조 보기"):
         st.success("파인튜닝 모드: 기존 best.pth 가중치를 로드했습니다.")
     
     st.subheader("모델 구조 상세")
-    st.code(model)
+    st.code(summary(model, (3, 224, 224), device=str(device)).__str__())
 
-# 재학습 버튼
+# 재학습 버튼 (기능 미구현 상태임을 명시)
 if st.button("재학습 시작"):
     st.info("재학습 기능을 준비 중입니다...")
-    # 여기에 재학습 로직을 구현할 수 있습니다.
-    # 예시:
-    # model = AngleHead(pretrained=False).to(device)
-    # ... (가중치 로드 및 옵티마이저 설정) ...
-    # for epoch in range(epochs):
-    #   ... (학습 루프) ...
     st.warning("재학습 기능은 현재 미구현 상태입니다. 로컬 환경에서 학습 스크립트를 사용해주세요.")
 
 # 변형된 레이어나 가중치를 미리보기 버튼
@@ -316,26 +379,44 @@ if st.button("취소"):
     st.success("앱 상태가 초기화되었습니다.")
 
 st.markdown("---")
-st.subheader("파인튜닝된 모델 저장")
-if st.button("모델 저장하기"):
-    if not os.path.isfile(os.path.join(CKPT_DIR_ZERO, "best.pth")):
-        st.warning("저장할 파인튜닝된 모델이 없습니다.")
+st.subheader("분석 결과 PDF 저장")
+if st.button("분석결과 PDF파일로 저장하기"):
+    if 'analysis_results' not in st.session_state:
+        st.warning("분석 결과를 먼저 생성해야 합니다.")
     else:
-        st.info("파인튜닝된 모델을 저장합니다.")
-        filename = st.text_input("저장할 파일 이름을 입력하세요 (예: my_finetuned_model.pth)", "finetuned_model.pth")
-        
-        if st.button("확인"):
-            if not filename.endswith(".pth"):
-                st.error("파일 이름은 '.pth'로 끝나야 합니다.")
+        st.info("PDF 보고서를 생성합니다.")
+        filename = st.text_input("저장할 파일 이름을 입력하세요 (예: report.pdf)", "report.pdf")
+
+        if st.button("PDF 저장 확인"):
+            if not filename.endswith(".pdf"):
+                st.error("파일 이름은 '.pdf'로 끝나야 합니다.")
             else:
-                save_path = os.path.join(CKPT_DIR_ZERO, filename)
-                shutil.copy(os.path.join(CKPT_DIR_ZERO, "best.pth"), save_path)
-                st.success(f"모델이 '{filename}' 파일로 저장되었습니다.")
+                cm_fig, ax_cm = plt.subplots()
+                cm = confusion_matrix(
+                    [1 if r['true_mm'] > 0.5 else 0 for r in st.session_state['analysis_results']],
+                    [1 if r['predicted_psi_rad'] > math.pi else 0 for r in st.session_state['analysis_results']]
+                )
+                sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax_cm)
+                cm_fig.savefig("cm_temp.png")
+
+                # Plotly ROC 곡선을 이미지로 저장
+                y_true_binary = [1 if r['true_mm'] > 0.5 else 0 for r in st.session_state['analysis_results']]
+                y_scores = [r['predicted_psi_rad'] / TWO_PI for r in st.session_state['analysis_results']]
+                fpr, tpr, _ = roc_curve(y_true_binary, y_scores)
+                roc_auc = auc(fpr, tpr)
+                fig_roc = go.Figure()
+                fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f'ROC curve (AUC = {roc_auc:.2f})'))
+                fig_roc.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode='lines', name='Random Guess', line=dict(dash='dash')))
+                fig_roc.update_layout(title='ROC Curve')
+                fig_roc.write_image("roc_temp.png")
+
+                create_pdf_report(filename, st.session_state['analysis_results'], cm_fig, "roc_temp.png")
                 
-                with open(save_path, "rb") as f:
+                with open(filename, "rb") as f:
                     st.download_button(
-                        label=f"{filename} 다운로드",
+                        label=f"'{filename}' 다운로드",
                         data=f,
                         file_name=filename,
-                        mime="application/octet-stream"
+                        mime="application/pdf"
                     )
+                st.success(f"PDF 보고서 '{filename}'가 생성되었습니다.")
