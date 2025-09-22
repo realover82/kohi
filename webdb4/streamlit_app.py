@@ -186,7 +186,7 @@ def main():
                 else:
                     st.error("PCB 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['pcb'] is not None:
-            display_analysis_result('pcb', st.session_state.uploaded_files['pcb'].name, 'PcbMaxIrPwr')
+            display_analysis_result('pcb', st.session_state.uploaded_files['pcb'].name)#, 'PcbMaxIrPwr')
 
     # Fw
     with tab2:
@@ -204,7 +204,7 @@ def main():
                 else:
                     st.error("Fw 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['fw'] is not None:
-            display_analysis_result('fw', st.session_state.uploaded_files['fw'].name, 'FwPC')
+            display_analysis_result('fw', st.session_state.uploaded_files['fw'].name)#, 'FwPC')
 
     # RfTx
     with tab3:
@@ -222,7 +222,7 @@ def main():
                 else:
                     st.error("RfTx 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['rftx'] is not None:
-            display_analysis_result('rftx', st.session_state.uploaded_files['rftx'].name, 'RfTxPC')
+            display_analysis_result('rftx', st.session_state.uploaded_files['rftx'].name)#, 'RfTxPC')
 
     # Semi
     with tab4:
@@ -240,7 +240,7 @@ def main():
                 else:
                     st.error("Semi 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['semi'] is not None:
-            display_analysis_result('semi', st.session_state.uploaded_files['semi'].name, 'SemiAssyMaxSolarVolt')
+            display_analysis_result('semi', st.session_state.uploaded_files['semi'].name)#, 'SemiAssyMaxSolarVolt')
 
     # Func
     with tab5:
@@ -258,7 +258,7 @@ def main():
                 else:
                     st.error("Func 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['func'] is not None:
-            display_analysis_result('func', st.session_state.uploaded_files['func'].name, 'BatadcPC')
+            display_analysis_result('func', st.session_state.uploaded_files['func'].name)#, 'BatadcPC')
 
 
 if __name__ == "__main__":
