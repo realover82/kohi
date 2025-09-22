@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import altair as alt
 
 # 각 CSV 분석 모듈 불러오기
 from csv2 import read_csv_with_dynamic_header, analyze_data
@@ -46,40 +47,70 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
     st.write(f"**분석 시간**: {st.session_state.analysis_time[analysis_key]}")
     st.markdown("---")
 
-    # --- 요약 대시보드 (테이블, 그래프) ---
-    st.subheader("요약 대시보드 (조회 기간 합계)")
-    
+    # --- 데이터 집계 및 대시보드 ---
     jigs_to_display = jig_list if selected_jig == "전체" else [selected_jig]
     
-    # 범위 내 데이터 집계
-    total_summary = {'total_test': 0, 'pass': 0, 'false_defect': 0, 'true_defect': 0, 'fail': 0}
-    daily_data = []
+    report_data = {'지표': ['총 테스트 수', 'PASS', '가성불량', '진성불량', 'FAIL']}
+    daily_chart_data = []
 
-    for jig in jigs_to_display:
-        for date_obj in filtered_dates:
-            date_iso = date_obj.strftime('%Y-%m-%d')
-            data_point = summary_data.get(jig, {}).get(date_iso)
+    # 날짜를 기준으로 먼저 반복하여 일별 데이터 합산
+    for date_obj in filtered_dates:
+        daily_totals = {key: 0 for key in ['total_test', 'pass', 'false_defect', 'true_defect', 'fail']}
+        
+        for jig in jigs_to_display:
+            data_point = summary_data.get(jig, {}).get(date_obj.strftime('%Y-%m-%d'))
             if data_point:
-                for key in total_summary:
-                    total_summary[key] += data_point.get(key, 0)
-                daily_data.append({
-                    'date': date_obj,
-                    'PASS': data_point.get('pass', 0),
-                    '가성불량': data_point.get('false_defect', 0),
-                    '진성불량': data_point.get('true_defect', 0),
-                })
+                for key in daily_totals:
+                    daily_totals[key] += data_point.get(key, 0)
+        
+        date_str_col = date_obj.strftime('%y%m%d')
+        report_data[date_str_col] = [
+            daily_totals['total_test'], daily_totals['pass'], daily_totals['false_defect'],
+            daily_totals['true_defect'], daily_totals['fail']
+        ]
+        
+        daily_chart_data.append({
+            'date': date_obj,
+            'PASS': daily_totals['pass'],
+            '가성불량': daily_totals['false_defect'],
+            '진성불량': daily_totals['true_defect'],
+            'FAIL': daily_totals['fail']
+        })
 
-    summary_df = pd.DataFrame({
-        '지표': ['총 테스트 수', 'PASS', '가성불량', '진성불량', 'FAIL'],
-        '합계': [total_summary['total_test'], total_summary['pass'], total_summary['false_defect'], total_summary['true_defect'], total_summary['fail']]
-    }).set_index('지표')
-    
-    st.table(summary_df)
+    # --- 일별 요약 테이블 ---
+    st.subheader("일별 요약 테이블")
+    report_df = pd.DataFrame(report_data).set_index('지표')
+    st.dataframe(report_df)
 
+    # --- 일별 추이 그래프 ---
     st.subheader("일별 추이 그래프")
-    if daily_data:
-        chart_df = pd.DataFrame(daily_data).set_index('date')
-        st.bar_chart(chart_df)
+    chart_mode_key = f'chart_mode_{analysis_key}'
+    if chart_mode_key not in st.session_state:
+        st.session_state[chart_mode_key] = 'bar'
+
+    graph_cols = st.columns(2)
+    with graph_cols[0]:
+        if st.button("꺾은선 그래프", key=f"line_chart_btn_{analysis_key}"):
+            st.session_state[chart_mode_key] = 'line'
+    with graph_cols[1]:
+        if st.button("막대 그래프", key=f"bar_chart_btn_{analysis_key}"):
+            st.session_state[chart_mode_key] = 'bar'
+    
+    if daily_chart_data:
+        chart_df = pd.DataFrame(daily_chart_data)
+        chart_df_melted = chart_df.melt('date', var_name='지표', value_name='수량')
+
+        common_chart = alt.Chart(chart_df_melted).encode(
+            x=alt.X('date:T', axis=alt.Axis(title='날짜', format='%Y-%m-%d')),
+            y=alt.Y('수량:Q', axis=alt.Axis(title='수량')),
+            color='지표:N',
+            tooltip=['date:T', '지표', '수량']
+        ).interactive()
+
+        if st.session_state[chart_mode_key] == 'line':
+            st.altair_chart(common_chart.mark_line(point=True), use_container_width=True)
+        else:
+            st.altair_chart(common_chart.mark_bar(), use_container_width=True)
     else:
         st.info("그래프를 표시할 데이터가 없습니다.")
 
@@ -93,7 +124,7 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
         
         for jig in jigs_to_display:
             data_point = summary_data.get(jig, {}).get(date_iso)
-            if not data_point:
+            if not data_point or data_point.get('total_test', 0) == 0:
                 continue
 
             st.markdown(f"**PC(Jig): {jig}**")
@@ -101,13 +132,14 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
             labels = ['PASS', '가성불량', '진성불량', 'FAIL']
             
             for cat, label in zip(categories, labels):
-                sns_list = data_point.get(f'{cat}_sns', [])
                 count = data_point.get(cat, 0)
-                with st.expander(f"{label} - {count}건", expanded=False):
-                    if sns_list:
-                        st.text("\n".join(sns_list))
-                    else:
-                        st.info("해당 내역이 없습니다.")
+                if count > 0:
+                    sns_list = data_point.get(f'{cat}_sns', [])
+                    with st.expander(f"{label} - {count}건", expanded=False):
+                        if sns_list:
+                            st.text("\n".join(sns_list))
+                        else:
+                            st.info("해당 내역이 없습니다.")
         st.markdown("---")
 
 
@@ -120,11 +152,10 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
         all_columns = df_raw.columns.tolist()
         selected_columns = st.multiselect("표시할 필드(열) 선택", all_columns, key=f"col_select_{analysis_key}")
     with search_col3:
-        st.write("") # 여백
-        st.write("") # 여백
+        st.write("") 
+        st.write("") 
         apply_button = st.button("필터 적용", key=f"apply_filter_{analysis_key}")
 
-    # 필터 적용 버튼 클릭 시 상태 저장
     filter_state_key = f'applied_filters_{analysis_key}'
     if apply_button:
         st.session_state[filter_state_key] = {
@@ -132,13 +163,11 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
             'columns': selected_columns
         }
     
-    # 세션 상태에 저장된 필터 불러오기
     applied_filters = st.session_state.get(filter_state_key, {'snumber': '', 'columns': []})
 
     with st.expander("DB 원본 확인"):
         df_display = df_raw.copy()
         
-        # SNumber 필터링 (적용된 필터 기준)
         if applied_filters['snumber']:
             query = applied_filters['snumber']
             if 'SNumber' in df_display.columns and pd.api.types.is_string_dtype(df_display['SNumber']):
@@ -149,9 +178,9 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
                  except Exception:
                      st.warning("SNumber 검색을 지원하지 않는 데이터 형식입니다.")
 
-        # 필드(열) 선택 필터링 (적용된 필터 기준)
         if applied_filters['columns']:
-            df_display = df_display[applied_filters['columns']]
+            existing_cols = [col for col in applied_filters['columns'] if col in df_display.columns]
+            df_display = df_display[existing_cols]
         
         st.dataframe(df_display)
 
