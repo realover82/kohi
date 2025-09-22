@@ -1,155 +1,19 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
-import io
+from datetime import datetime, date
 
-# csv2.py와 csv-b.py에서 함수들을 가져옵니다.
-from csv2 import read_csv_with_dynamic_header, analyze_data
-from csv_Fw import read_csv_with_dynamic_header_for_Fw, analyze_Fw_data
-from csv_RfTx import read_csv_with_dynamic_header_for_RfTx, analyze_RfTx_data
-from csv_Semi import read_csv_with_dynamic_header_for_Semi, analyze_Semi_data
-from csv_Batadc import read_csv_with_dynamic_header_for_Batadc, analyze_Batadc_data
-
-def display_analysis_result(analysis_key, file_name, df_filtered):
-    """ session_state에 저장된 분석 결과를 Streamlit에 표시하는 함수"""
-    if st.session_state.analysis_results[analysis_key] is None:
-        st.error("데이터 로드에 실패했습니다. 파일 형식을 확인해주세요.")
-        return
-
-    # df_result = st.session_state.analysis_results[analysis_key]
-    summary_data, all_dates = st.session_state.analysis_data[analysis_key]
-    
-    st.markdown(f"### '{file_name}' 분석 리포트")
-    
-    kor_date_cols = [f"{d.strftime('%y%m%d')}" for d in all_dates]
-    
-    st.write(f"**분석 시간**: {st.session_state.analysis_time[analysis_key]}")
-    st.markdown("---")
-
-    all_reports_text = ""
-    
-    for jig in sorted(summary_data.keys()):
-        st.subheader(f"구분: {jig}")
-        
-        report_data = {
-            '지표': ['총 테스트 수', 'PASS', '가성불량', '진성불량', 'FAIL']
-        }
-        
-        for date_iso, date_str in zip([d.strftime('%Y-%m-%d') for d in all_dates], kor_date_cols):
-            data_point = summary_data[jig].get(date_iso)
-            if data_point:
-                report_data[date_str] = [
-                    data_point['total_test'],
-                    data_point['pass'],
-                    data_point['false_defect'],
-                    data_point['true_defect'],
-                    data_point['fail']
-                ]
-            else:
-                report_data[date_str] = ['N/A'] * 5
-        
-        report_df = pd.DataFrame(report_data)
-        st.table(report_df)
-        all_reports_text += report_df.to_csv(index=False) + "\n"
-
-        # 상세 내역 표시
-        st.markdown("#### 상세 내역")
-        
-        # PassStatusNorm 컬럼을 먼저 생성
-        pass_col_name = None
-        if 'PcbPass' in df_filtered.columns: pass_col_name = 'PcbPass'
-        elif 'FwPass' in df_filtered.columns: pass_col_name = 'FwPass'
-        elif 'RfTxPass' in df_filtered.columns: pass_col_name = 'RfTxPass'
-        elif 'SemiAssyPass' in df_filtered.columns: pass_col_name = 'SemiAssyPass'
-        elif 'BatadcPass' in df_filtered.columns: pass_col_name = 'BatadcPass'
-        
-        if pass_col_name:
-            df_filtered['PassStatusNorm'] = df_filtered[pass_col_name].fillna('').astype(str).str.strip().str.upper()
-        else:
-            st.warning("Pass 상태를 나타내는 컬럼이 없어 상세 내역을 표시할 수 없습니다.")
-            continue
-            
-        if 'SNumber' not in df_filtered.columns:
-            st.warning("'SNumber' 컬럼이 없어 상세 내역을 표시할 수 없습니다.")
-            continue
-            
-        jig_col_name = None
-        if 'PcbMaxIrPwr' in df_filtered.columns: jig_col_name = 'PcbMaxIrPwr'
-        elif 'FwPC' in df_filtered.columns: jig_col_name = 'FwPC'
-        elif 'RfTxPC' in df_filtered.columns: jig_col_name = 'RfTxPC'
-        elif 'SemiAssyMaxBatVolt' in df_filtered.columns: jig_col_name = 'SemiAssyMaxBatVolt'
-        elif 'BatadcPC' in df_filtered.columns: jig_col_name = 'BatadcPC'
-        
-        if jig_col_name:
-            jig_filtered_df = df_filtered[df_filtered[jig_col_name] == jig].copy()
-        else:
-            jig_filtered_df = df_filtered.copy()
-
-
-        pass_sns = jig_filtered_df.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
-        pass_sns = pass_sns[pass_sns].index.tolist()
-        
-        with st.expander(f"PASS ({len(pass_sns)}건)", expanded=False):
-            st.text("\n".join(pass_sns))
-        
-        false_defect_sns = jig_filtered_df[(jig_filtered_df['PassStatusNorm'] == 'X') & (jig_filtered_df['SNumber'].isin(pass_sns))]['SNumber'].unique().tolist()
-        with st.expander(f"가성불량 ({len(false_defect_sns)}건)", expanded=False):
-            st.text("\n".join(false_defect_sns))
-            
-        true_defect_sns = jig_filtered_df[(jig_filtered_df['PassStatusNorm'] == 'X') & (~jig_filtered_df['SNumber'].isin(pass_sns))]['SNumber'].unique().tolist()
-        with st.expander(f"진성불량 ({len(true_defect_sns)}건)", expanded=False):
-            st.text("\n".join(true_defect_sns))
-
-        all_snumbers = jig_filtered_df['SNumber'].unique().tolist()
-        all_fail_sns = list(set(all_snumbers) - set(pass_sns))
-        with st.expander(f"FAIL ({len(all_fail_sns)}건)", expanded=False):
-            st.text("\n".join(all_fail_sns))
-        
-        st.markdown("---")
-
-
-    st.success("분석이 완료되었습니다!")
-
-    # 분석 결과를 CSV 파일로 다운로드하는 버튼 (st.download_button)
-    st.download_button(
-        label="분석 결과 다운로드",
-        data=all_reports_text.encode('utf-8-sig'),
-        file_name=f"{file_name}_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-        mime="text/csv",
-    )
-
-@st.cache_data
-def read_pcb_data(uploaded_file):
-    return read_csv_with_dynamic_header(uploaded_file)
-
-@st.cache_data
-def read_fw_data(uploaded_file):
-    return read_csv_with_dynamic_header_for_Fw(uploaded_file)
-
-@st.cache_data
-def read_rftx_data(uploaded_file):
-    return read_csv_with_dynamic_header_for_RfTx(uploaded_file)
-
-@st.cache_data
-def read_semi_data(uploaded_file):
-    return read_csv_with_dynamic_header_for_Semi(uploaded_file)
-    
-@st.cache_data
-def read_batadc_data(uploaded_file):
-    return read_csv_with_dynamic_header_for_Batadc(uploaded_file)
+from util1 import get_jig_and_date_inputs, create_tabs_config
+from util2 import analyze_data, display_analysis_result
+from util3 import display_data_view_controls
 
 def main():
     st.set_page_config(layout="wide")
     st.title("리모컨 생산 데이터 분석 툴")
     st.markdown("---")
 
-    # session_state 초기화
+    # Initialize session state variables
     if 'analysis_results' not in st.session_state:
         st.session_state.analysis_results = {
-            'pcb': None, 'fw': None, 'rftx': None, 'semi': None, 'func': None
-        }
-    if 'uploaded_files' not in st.session_state:
-        st.session_state.uploaded_files = {
             'pcb': None, 'fw': None, 'rftx': None, 'semi': None, 'func': None
         }
     if 'analysis_data' not in st.session_state:
@@ -160,99 +24,102 @@ def main():
         st.session_state.analysis_time = {
             'pcb': None, 'fw': None, 'rftx': None, 'semi': None, 'func': None
         }
+    if 'selected_cols' not in st.session_state:
+        st.session_state.selected_cols = {
+            'pcb': [], 'fw': [], 'rftx': [], 'semi': [], 'func': []
+        }
+    if 'snumber_search' not in st.session_state:
+        st.session_state.snumber_search = {
+            'pcb': {'results': pd.DataFrame(), 'show': False},
+            'fw': {'results': pd.DataFrame(), 'show': False},
+            'rftx': {'results': pd.DataFrame(), 'show': False},
+            'semi': {'results': pd.DataFrame(), 'show': False},
+            'func': {'results': pd.DataFrame(), 'show': False},
+        }
+    if 'original_db_view' not in st.session_state:
+        st.session_state.original_db_view = {
+            'pcb': {'results': pd.DataFrame(), 'show': False},
+            'fw': {'results': pd.DataFrame(), 'show': False},
+            'rftx': {'results': pd.DataFrame(), 'show': False},
+            'semi': {'results': pd.DataFrame(), 'show': False},
+            'func': {'results': pd.DataFrame(), 'show': False},
+        }
+    if 'show_line_chart' not in st.session_state:
+        st.session_state.show_line_chart = {}
+    if 'show_bar_chart' not in st.session_state:
+        st.session_state.show_bar_chart = {}
+        
+    tabs_config = create_tabs_config()
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([f"파일 {key.upper()} 분석" for key in tabs_config.keys()])
+    
+    tabs_dict = {
+        'pcb': tab1, 'fw': tab2, 'rftx': tab3, 'semi': tab4, 'func': tab5
+    }
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["파일 PCB 분석", "파일 Fw 분석", "파일 RfTx 분석", "파일 Semi 분석", "파일 Func 분석"])
-
-    with tab1:
-        st.header("파일 PCB (Pcb_Process)")
-        st.session_state.uploaded_files['pcb'] = st.file_uploader("파일 PCB를 선택하세요", type=["csv"], key="uploader_pcb")
-        if st.session_state.uploaded_files['pcb']:
-            if st.button("파일 PCB 분석 실행", key="analyze_pcb"):
-                df = read_pcb_data(st.session_state.uploaded_files['pcb'])
-                if df is not None:
-                    with st.spinner("데이터 분석 및 저장 중..."):
-                        st.session_state.analysis_results['pcb'] = df
-                        st.session_state.analysis_data['pcb'] = analyze_data(df)
-                        st.session_state.analysis_time['pcb'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    st.success("분석 완료! 결과가 저장되었습니다.")
-                else:
-                    st.error("PCB 데이터 파일을 읽을 수 없습니다.")
-
-            # 저장된 결과가 있으면 표시
-            if st.session_state.analysis_results['pcb'] is not None:
-                display_analysis_result('pcb', st.session_state.uploaded_files['pcb'].name, st.session_state.analysis_results['pcb'])
-
-    with tab2:
-        st.header("파일 Fw (Fw_Process)")
-        st.session_state.uploaded_files['fw'] = st.file_uploader("파일 Fw를 선택하세요", type=["csv"], key="uploader_fw")
-        if st.session_state.uploaded_files['fw']:
-            if st.button("파일 Fw 분석 실행", key="analyze_fw"):
-                df = read_fw_data(st.session_state.uploaded_files['fw'])
-                if df is not None:
-                    with st.spinner("데이터 분석 및 저장 중..."):
-                        st.session_state.analysis_results['fw'] = df
-                        st.session_state.analysis_data['fw'] = analyze_Fw_data(df)
-                        st.session_state.analysis_time['fw'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    st.success("분석 완료! 결과가 저장되었습니다.")
-                else:
-                    st.error("Fw 데이터 파일을 읽을 수 없습니다.")
-
-            if st.session_state.analysis_results['fw'] is not None:
-                display_analysis_result('fw', st.session_state.uploaded_files['fw'].name, st.session_state.analysis_results['fw'])
-
-    with tab3:
-        st.header("파일 RfTx (RfTx_Process)")
-        st.session_state.uploaded_files['rftx'] = st.file_uploader("파일 RfTx를 선택하세요", type=["csv"], key="uploader_rftx")
-        if st.session_state.uploaded_files['rftx']:
-            if st.button("파일 RfTx 분석 실행", key="analyze_rftx"):
-                df = read_rftx_data(st.session_state.uploaded_files['rftx'])
-                if df is not None:
-                    with st.spinner("데이터 분석 및 저장 중..."):
-                        st.session_state.analysis_results['rftx'] = df
-                        st.session_state.analysis_data['rftx'] = analyze_RfTx_data(df)
-                        st.session_state.analysis_time['rftx'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    st.success("분석 완료! 결과가 저장되었습니다.")
-                else:
-                    st.error("RfTx 데이터 파일을 읽을 수 없습니다.")
-
-            if st.session_state.analysis_results['rftx'] is not None:
-                display_analysis_result('rftx', st.session_state.uploaded_files['rftx'].name, st.session_state.analysis_results['rftx'])
-
-    with tab4:
-        st.header("파일 Semi (SemiAssy_Process)")
-        st.session_state.uploaded_files['semi'] = st.file_uploader("파일 Semi를 선택하세요", type=["csv"], key="uploader_semi")
-        if st.session_state.uploaded_files['semi']:
-            if st.button("파일 Semi 분석 실행", key="analyze_semi"):
-                df = read_semi_data(st.session_state.uploaded_files['semi'])
-                if df is not None:
-                    with st.spinner("데이터 분석 및 저장 중..."):
-                        st.session_state.analysis_results['semi'] = df
-                        st.session_state.analysis_data['semi'] = analyze_Semi_data(df)
-                        st.session_state.analysis_time['semi'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    st.success("분석 완료! 결과가 저장되었습니다.")
-                else:
-                    st.error("Semi 데이터 파일을 읽을 수 없습니다.")
-
-            if st.session_state.analysis_results['semi'] is not None:
-                display_analysis_result('semi', st.session_state.uploaded_files['semi'].name, st.session_state.analysis_results['semi'])
-
-    with tab5:
-        st.header("파일 Func (Func_Process)")
-        st.session_state.uploaded_files['func'] = st.file_uploader("파일 Func를 선택하세요", type=["csv"], key="uploader_func")
-        if st.session_state.uploaded_files['func']:
-            if st.button("파일 Func 분석 실행", key="analyze_func"):
-                df = read_batadc_data(st.session_state.uploaded_files['func'])
-                if df is not None:
-                    with st.spinner("데이터 분석 및 저장 중..."):
-                        st.session_state.analysis_results['func'] = df
-                        st.session_state.analysis_data['func'] = analyze_Batadc_data(df)
-                        st.session_state.analysis_time['func'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    st.success("분석 완료! 결과가 저장되었습니다.")
-                else:
-                    st.error("Func 데이터 파일을 읽을 수 없습니다.")
+    for key, tab_content in tabs_dict.items():
+        with tab_content:
+            st.header(tabs_config[key]['header'])
             
-            if st.session_state.analysis_results['func'] is not None:
-                display_analysis_result('func', st.session_state.uploaded_files['func'].name, st.session_state.analysis_results['func'])
+            uploaded_file = st.file_uploader("CSV 파일 업로드", type=["csv"], key=f"uploader_{key}")
             
+            if uploaded_file:
+                df_all_data = get_jig_and_date_inputs(uploaded_file, key)
+                
+                if df_all_data is not None and not df_all_data.empty:
+                    st.success("파일이 성공적으로 로드되었습니다.")
+                    st.session_state.analysis_results[key] = df_all_data.copy()
+                    st.session_state.selected_cols[key] = df_all_data.columns.tolist()
+                else:
+                    st.warning("유효한 데이터를 불러오지 못했습니다. 올바른 형식의 파일인지 확인해주세요.")
+                    st.session_state.analysis_results[key] = None
+
+            if st.session_state.analysis_results[key] is not None:
+                df_to_analyze = st.session_state.analysis_results[key].copy()
+                jig_col_name = tabs_config[key]['jig_col']
+                date_col_name = tabs_config[key]['date_col']
+                
+                if f"{date_col_name}_dt" not in df_to_analyze.columns:
+                    df_to_analyze[f"{date_col_name}_dt"] = pd.to_datetime(df_to_analyze[date_col_name], errors='coerce')
+                
+                if jig_col_name in df_to_analyze.columns:
+                    unique_pc = df_to_analyze[jig_col_name].dropna().unique()
+                    pc_options = ['모든 PC'] + sorted(list(unique_pc))
+                    selected_pc = st.selectbox("PC (Jig) 선택", pc_options, key=f"pc_select_{key}")
+                else:
+                    st.warning(f"'{jig_col_name}' 컬럼이 없어 PC 선택 기능을 사용할 수 없습니다. '모든 PC'로 설정됩니다.")
+                    selected_pc = '모든 PC'
+
+                df_dates = df_to_analyze[f"{date_col_name}_dt"].dt.date.dropna()
+                min_date = df_dates.min() if not df_dates.empty else date.today()
+                max_date = df_dates.max() if not df_dates.dropna().empty else date.today()
+                selected_dates = st.date_input("날짜 범위 선택", value=(min_date, max_date), key=f"dates_{key}")
+                
+                if st.button("분석 실행", key=f"analyze_{key}"):
+                    with st.spinner("데이터 분석 및 저장 중..."):
+                        if len(selected_dates) == 2:
+                            start_date, end_date = selected_dates
+                            df_filtered = df_to_analyze[
+                                (df_to_analyze[f"{date_col_name}_dt"].dt.date >= start_date) &
+                                (df_to_analyze[f"{date_col_name}_dt"].dt.date <= end_date)
+                            ].copy()
+                            
+                            if selected_pc != '모든 PC':
+                                df_filtered = df_filtered[df_filtered[jig_col_name] == selected_pc].copy()
+                        else:
+                            st.warning("날짜 범위를 올바르게 선택해주세요.")
+                            df_filtered = pd.DataFrame()
+                        
+                        st.session_state.analysis_results[key] = df_filtered
+                        st.session_state.analysis_data[key] = analyze_data(df_filtered, f"{date_col_name}_dt", jig_col_name)
+                        st.session_state.analysis_time[key] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    st.success("분석 완료! 결과가 저장되었습니다.")
+
+                # Display analysis results
+                display_analysis_result(key, tabs_config[key]['header'], f"{date_col_name}_dt",
+                                        selected_jig=selected_pc if selected_pc != '모든 PC' else None)
+                
+                # Display data view controls
+                display_data_view_controls(key, tabs_config[key]['header'], tabs_config[key]['date_col'])
+
 if __name__ == "__main__":
     main()
