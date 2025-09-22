@@ -18,25 +18,29 @@ def analyze_data(df, date_col_name, jig_col_name):
     df_copy = df.copy()
     
     pass_col_found = False
+    pass_col_name = None
     if 'PcbPass' in df_copy.columns:
-        df_copy['PassStatusNorm'] = df_copy['PcbPass'].fillna('').astype(str).str.strip().str.upper()
+        pass_col_name = 'PcbPass'
         pass_col_found = True
     elif 'FwPass' in df_copy.columns:
-        df_copy['PassStatusNorm'] = df_copy['FwPass'].fillna('').astype(str).str.strip().str.upper()
+        pass_col_name = 'FwPass'
         pass_col_found = True
     elif 'RfTxPass' in df_copy.columns:
-        df_copy['PassStatusNorm'] = df_copy['RfTxPass'].fillna('').astype(str).str.strip().str.upper()
+        pass_col_name = 'RfTxPass'
         pass_col_found = True
     elif 'SemiAssyPass' in df_copy.columns:
-        df_copy['PassStatusNorm'] = df_copy['SemiAssyPass'].fillna('').astype(str).str.strip().str.upper()
+        pass_col_name = 'SemiAssyPass'
         pass_col_found = True
     elif 'BatadcPass' in df_copy.columns:
-        df_copy['PassStatusNorm'] = df_copy['BatadcPass'].fillna('').astype(str).str.strip().str.upper()
+        pass_col_name = 'BatadcPass'
         pass_col_found = True
     
     if not pass_col_found:
         st.warning("Pass 상태를 나타내는 컬럼이 없습니다.")
         return {}, [], jig_col_name
+    
+    # PassStatusNorm 컬럼을 먼저 생성
+    df_copy['PassStatusNorm'] = df_copy[pass_col_name].fillna('').astype(str).str.strip().str.upper()
 
     summary_data = {}
     
