@@ -1,9 +1,3 @@
-# https://docs.google.com/document/d/1xM41pxjCOJrOGqDv6KcR1NvN8sGToFLhNksQx5umPH4/edit?usp=sharing
-# =========================================================
-# Gauge Preprocessing with TPU Acceleration
-# - 코랩 T4 TPU 활용한 고속 전처리
-# - 단계별 디버깅 이미지 저장
-# =========================================================
 import os, re, math, datetime, time
 import numpy as np
 import cv2
@@ -100,7 +94,7 @@ def _resize_for_hough(bgr, short_side=HOUGH_SHORT_SIDE):
     return small, scale
 
 # ▼▼▼ [수정] 이 함수 전체를 교체하세요 ▼▼▼
-def detect_gauge_circle_debug(bgr, filename, circle_param2=60): #, subfolder=""
+def detect_gauge_circle_debug(bgr, filename, circle_param2=60, subfolder=""):
     """
     다이얼 게이지 원 검출(디버그용).
     - 강건한 전처리(CLAHE+샤픈+Canny)
@@ -112,7 +106,7 @@ def detect_gauge_circle_debug(bgr, filename, circle_param2=60): #, subfolder=""
 
     # 0) 리사이즈(기존 도구 사용)
     small, s = _resize_for_hough(bgr)
-    save_debug_image(small, filename, "1_hough_resized") #
+    save_debug_image(small, filename, "1_hough_resized", subfolder=subfolder)
 
     # 1) 그레이 + 콘트라스트 향상 + 살짝 샤픈
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)   # (오타 수정: BGR2GRAY)
@@ -122,13 +116,13 @@ def detect_gauge_circle_debug(bgr, filename, circle_param2=60): #, subfolder=""
     # Unsharp mask
     blur = cv2.GaussianBlur(gray, (0,0), 1.2)
     sharp = cv2.addWeighted(gray, 1.6, blur, -0.6, 0)
-    save_debug_image(sharp, filename, "2_gray_sharpened") #
+    save_debug_image(sharp, filename, "2_gray_sharpened", subfolder=subfolder)
 
     h, w = sharp.shape[:2]
     img_center = np.array([w/2.0, h/2.0], dtype=np.float32)
 
     # 2) 중앙부 원형 ROI(테두리 잡음 억제)
-    #    게이지는 대체로 중앙에 있음: 반지름은 화면의 0.48배 정도로 설정
+    #     게이지는 대체로 중앙에 있음: 반지름은 화면의 0.48배 정도로 설정
     roi_mask = np.zeros_like(sharp, dtype=np.uint8)
     roi_r = int(min(h, w) * 0.48)
     cv2.circle(roi_mask, (int(img_center[0]), int(img_center[1])), roi_r, 255, -1)
@@ -139,7 +133,7 @@ def detect_gauge_circle_debug(bgr, filename, circle_param2=60): #, subfolder=""
     high = int(min(255, 1.33*med))
     edges = cv2.Canny(sharp, low, high)
     edges = cv2.bitwise_and(edges, edges, mask=roi_mask)
-    save_debug_image(edges, filename, "3_edges_roi") #
+    save_debug_image(edges, filename, "3_edges_roi", subfolder=subfolder)
 
     # 4) HoughCircles 파라미터 (눈금 링/베젤 범위로 고정)
     min_r = int(min(h, w) * 0.30)
@@ -149,8 +143,8 @@ def detect_gauge_circle_debug(bgr, filename, circle_param2=60): #, subfolder=""
         sharp, cv2.HOUGH_GRADIENT,
         dp=1.2,
         minDist=int(min(h, w) * 0.22),
-        param1=max(80, high),           # Canny high를 그대로 사용(또는 최소 80)
-        param2=int(circle_param2),      # 누산기 임계 ↑ (기본 60 권장)
+        param1=max(80, high),
+        param2=int(circle_param2),
         minRadius=min_r,
         maxRadius=max_r
     )
@@ -216,7 +210,7 @@ def detect_gauge_circle_debug(bgr, filename, circle_param2=60): #, subfolder=""
         cx, cy, r = best
         cv2.circle(debug_img, (cx, cy), r, (255, 0, 0), 3, cv2.LINE_AA)
         cv2.circle(debug_img, (cx, cy), 3, (0, 0, 255), -1)
-    save_debug_image(debug_img, filename, "4_circle_detection_selected") #
+    save_debug_image(debug_img, filename, "4_circle_detection_selected", subfolder=subfolder)
 
     if best is None:
         return None
@@ -234,8 +228,9 @@ def detect_needle_line_debug(
     minLineLength=0.42, maxLineGap=0.06,
     # 레이 스캔 파라미터
     inner_ratio=0.12, outer_ratio=0.96,
-    deg_step=0.5, ray_clip_pct=0.25
-):  #, subfolder=""
+    deg_step=0.5, ray_clip_pct=0.25,
+    subfolder=""
+):
     """
     방사선 스캔 기반 바늘 검출 (강건한 마스크 + 대비 기반 점수 + 폴백)
     디버그: 4_needle_roi, 5_needle_mask, 6_needle_edges, 7_line_detection, 8_final_needle
@@ -247,7 +242,7 @@ def detect_needle_line_debug(
     x2 = min(bgr.shape[1], cx + int(r*1.10)); y2 = min(bgr.shape[0], cy + int(r*1.10))
     roi = bgr[y1:y2, x1:x2]
     if roi.size == 0: return None
-    save_debug_image(roi, filename, "4_needle_roi") #
+    save_debug_image(roi, filename, "4_needle_roi", subfolder=subfolder)
 
     # 2) 축소 + 전처리
     small, s = _resize_for_hough(roi)
@@ -255,7 +250,7 @@ def detect_needle_line_debug(
     clahe = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8,8))
     g     = clahe.apply(gray)
     g     = cv2.addWeighted(g, 1.5, cv2.GaussianBlur(g, (0,0), 1.0), -0.5, 0)
-    save_debug_image(g, filename, "6_needle_edges") #
+    save_debug_image(g, filename, "6_needle_edges", subfolder=subfolder)
 
     h, w = g.shape[:2]
     scx = int(round((cx - x1) * s)); scy = int(round((cy - y1) * s))
@@ -263,8 +258,8 @@ def detect_needle_line_debug(
         scx, scy = w//2, h//2
 
     # --- 반경 산정: sr과 ROI기반 둘 다 사용하여 강건화 ---
-    sr = int(round(r * s))                        # 원 검출 반경(스케일된)
-    R_half = 0.5 * min(h, w)                      # ROI 절반
+    sr = int(round(r * s))                      # 원 검출 반경(스케일된)
+    R_half = 0.5 * min(h, w)                    # ROI 절반
     # sr이 비정상적으로 작/크면 ROI 기반으로 보정
     if not (0.55*R_half <= sr <= 1.25*R_half):
         sr = int(0.90*R_half)
@@ -303,17 +298,17 @@ def detect_needle_line_debug(
     if mask.mean() < 15.0:  # 평균 픽셀값(0~255)
         mask[:] = 0
         cv2.circle(mask, (scx, scy), R_out, 255, -1)
-    save_debug_image(mask, filename, "5_needle_mask") #
+    save_debug_image(mask, filename, "5_needle_mask", subfolder=subfolder)
 
     # 5) 방사선 스캔 (어둡기+대비 점수)
     thetas = np.deg2rad(np.arange(0, 360, max(0.1, float(deg_step))))
     R0 = max(1, (r_in if r_in > 0 else int(0.12*R_out)) + 1)
-    R1 = max(R0+16, R_out-1)                       # 최소 길이 보장
+    R1 = max(R0+16, R_out-1)                          # 최소 길이 보장
     base = np.arange(R0, R1)
     scores = np.full(len(thetas), 255.0, np.float32)
     offsets = [0.0, +1.0, -1.0]
     for i, th in enumerate(thetas):
-        nx, ny = -np.sin(th), np.cos(th)           # 평행 오프셋(대비 안정화)
+        nx, ny = -np.sin(th), np.cos(th)               # 평행 오프셋(대비 안정화)
         xs0 = scx + np.cos(th)*base
         ys0 = scy + np.sin(th)*base
         vals_dark, vals_bg = [], []
@@ -358,7 +353,7 @@ def detect_needle_line_debug(
     px2 = int(round(scx + math.cos(best_theta)*R1))
     py2 = int(round(scy + math.sin(best_theta)*R1))
     cv2.line(line_dbg, (scx, scy), (px2, py2), (0,255,0), 2)
-    save_debug_image(line_dbg, filename, "7_line_detection") #
+    save_debug_image(line_dbg, filename, "7_line_detection", subfolder=subfolder)
 
     # 7) 원본 좌표 복원 + 게이지 경계까지 연장
     ang = math.atan2((py2/s + y1) - cy, (px2/s + x1) - cx)
@@ -369,11 +364,9 @@ def detect_needle_line_debug(
     final_img = bgr.copy()
     cv2.circle(final_img, (cx, cy), r, (0,255,0), 2)
     cv2.line(final_img, (X1, Y1), (X2, Y2), (0,0,255), 3)
-    save_debug_image(final_img, filename, "8_final_needle")#
+    save_debug_image(final_img, filename, "8_final_needle", subfolder=subfolder)
 
     return (X1, Y1, X2, Y2)
-
-
 
 def _safe_crop(img, x1, y1, x2, y2):
     """안전한 이미지 크롭"""
@@ -407,26 +400,28 @@ def process_single_image(args):
         print(f"⚠️ 이미지 로드 실패: {src_path}")
         return False
 
+    subfolder = "train" if is_train else "test"
+
     # 원본 이미지 저장
-    save_debug_image(bgr, debug_filename, "0_original", "train" if is_train else "test")
+    save_debug_image(bgr, debug_filename, "0_original", subfolder=subfolder)
 
     params = HOUGH_PRESETS[USE_PRESET]
 
     try:
         # 1. 원 검출
-        circle = detect_gauge_circle_debug(bgr, debug_filename, params["circle_param2"]) #
+        circle = detect_gauge_circle_debug(bgr, debug_filename, params["circle_param2"], subfolder=subfolder)
 
         if not circle:
             print(f"⚠️ 원 검출 실패: {debug_filename}")
             crop = _center_square(bgr, side=int(min(bgr.shape[:2])*0.8))
-            save_debug_image(crop, debug_filename, "9_fallback_crop", "train" if is_train else "test") 
+            save_debug_image(crop, debug_filename, "9_fallback_crop", subfolder=subfolder)
         else:
             cx, cy, r = circle
             print(f"✅ 원 검출 성공: {debug_filename}")
 
             # 2. 바늘 검출
             line = detect_needle_line_debug(bgr, cx, cy, r, debug_filename,
-                                         params["minLineLen"], params["maxLineGap"]) #
+                                            params["minLineLen"], params["maxLineGap"], subfolder=subfolder)
 
             if line is not None:
                 # 바늘 각도 계산 및 회전
@@ -439,7 +434,7 @@ def process_single_image(args):
                 # 회전
                 M = cv2.getRotationMatrix2D((float(cx), float(cy)), -angle, 1.0)
                 rot = cv2.warpAffine(bgr, M, (bgr.shape[1], bgr.shape[0]))
-                save_debug_image(rot, debug_filename, "9_rotated", "train" if is_train else "test")
+                save_debug_image(rot, debug_filename, "9_rotated", subfolder=subfolder)
 
                 # ROI 크롭
                 tx, ty = int(cx+dx), int(cy+dy)
@@ -448,23 +443,23 @@ def process_single_image(args):
 
                 if crop is None:
                     crop = _center_square(rot, cx, cy, side=int(min(rot.shape[:2])*0.8))
-                    save_debug_image(crop, debug_filename, "10_center_crop", "train" if is_train else "test")
+                    save_debug_image(crop, debug_filename, "10_center_crop", subfolder=subfolder)
                 else:
-                    save_debug_image(crop, debug_filename, "10_needle_tip_crop", "train" if is_train else "test")
+                    save_debug_image(crop, debug_filename, "10_needle_tip_crop", subfolder=subfolder)
             else:
                 crop = _center_square(bgr, cx, cy, side=int(r*0.8))
-                save_debug_image(crop, debug_filename, "10_center_circle_crop", "train" if is_train else "test")
+                save_debug_image(crop, debug_filename, "10_center_circle_crop", subfolder=subfolder)
 
         if crop is None:
             crop = _center_square(bgr, side=int(min(bgr.shape[:2])*0.8))
-            save_debug_image(crop, debug_filename, "11_final_fallback_crop", "train" if is_train else "test")
+            save_debug_image(crop, debug_filename, "11_final_fallback_crop", subfolder=subfolder)
 
         # 3. 최종 전처리
         roi = cv2.resize(crop, (IMG_SIZE, IMG_SIZE))
         rgb_result = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
 
         # 최종 결과 저장
-        save_debug_image(rgb_result, debug_filename, "12_final_result", "train" if is_train else "test")
+        save_debug_image(rgb_result, debug_filename, "12_final_result", subfolder=subfolder)
 
         # 학습용 이미지 저장
         cv2.imwrite(dst_path, cv2.cvtColor(rgb_result, cv2.COLOR_RGB2BGR))
@@ -475,7 +470,7 @@ def process_single_image(args):
         print(f"❌ 전처리 실패 {debug_filename}: {e}")
         try:
             fallback = cv2.resize(bgr, (IMG_SIZE, IMG_SIZE))
-            save_debug_image(fallback, debug_filename, "13_error_fallback", "train" if is_train else "test")
+            save_debug_image(fallback, debug_filename, "13_error_fallback", subfolder=subfolder)
             cv2.imwrite(dst_path, fallback)
             return True
         except:
@@ -543,7 +538,6 @@ def run_preprocessing():
 if __name__ == "__main__":
     run_preprocessing()
     
-
 # ============================================
 # 1) Clean Dataset & Labels 만들기 (수정판)
 # ============================================
@@ -575,7 +569,7 @@ def safe_center_crop_square(bgr, cx, cy, r, pad_ratio=1.15, out_size=256):
     getRectSubPix로 잘라 out_size로 리사이즈. (가장 안전)
     """
     H, W = bgr.shape[:2]
-    S = int(max(32, min(max(2*r*pad_ratio, 32), 1.5*min(H, W))))  # 과/과소 스케일 방지
+    S = int(max(32, min(max(2*r*pad_ratio, 32), 1.5*min(H, W))))   # 과/과소 스케일 방지
     # getRectSubPix는 범위를 넘어가면 검정 패딩이 생길 수 있음 → 패딩이 과도하면 실패로 간주
     crop = cv2.getRectSubPix(bgr, (S, S), (float(cx), float(cy)))
     if crop is None or crop.size == 0:
@@ -591,7 +585,7 @@ def quality_is_bad(img_gray):
 
 def build_clean_dataset(split_dir, out_dir, csv_path, out_size=256):
     items = sorted([p for p in glob(os.path.join(split_dir, "*"))
-                    if p.lower().endswith(('.png','.jpg','.jpeg'))])
+                     if p.lower().endswith(('.png','.jpg','.jpeg'))])
     rows = [["filepath","theta_rad","sin","cos"]]
     ok = fail = 0
 
@@ -628,7 +622,7 @@ def build_clean_dataset(split_dir, out_dir, csv_path, out_size=256):
             if fallback is None or fallback.size==0:
                 fail += 1; continue
             clean_gray = cv2.resize(cv2.cvtColor(fallback, cv2.COLOR_BGR2GRAY),
-                                    (out_size,out_size), interpolation=cv2.INTER_AREA)
+                                     (out_size,out_size), interpolation=cv2.INTER_AREA)
             if quality_is_bad(clean_gray):
                 fail += 1; continue
 
@@ -639,7 +633,7 @@ def build_clean_dataset(split_dir, out_dir, csv_path, out_size=256):
 
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         csv.writer(f).writerows(rows)
-    print(f"[{os.path.basename(out_dir)}] OK={ok}  FAIL={fail}  → {csv_path}")
+    print(f"[{os.path.basename(out_dir)}] OK={ok}  FAIL={fail}   → {csv_path}")
 
 # 실행
 build_clean_dataset(TRAIN_DIR, DATASET_TRAIN, CSV_TRAIN, out_size=224)
