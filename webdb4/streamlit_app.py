@@ -101,38 +101,64 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
                 jig_filtered_df[date_col_name] = pd.to_datetime(jig_filtered_df[date_col_name], errors='coerce')
                 
             dates_in_jig = sorted(jig_filtered_df[date_col_name].dt.date.dropna().unique())
+            
+            # 각 지표에 대한 버튼을 컬럼으로 표시
+            expander_cols = st.columns(4)
+            
+            # 버튼 클릭 상태를 저장할 딕셔너리
+            if f'show_details_{analysis_key}' not in st.session_state:
+                st.session_state[f'show_details_{analysis_key}'] = {'pass': False, 'false_defect': False, 'true_defect': False, 'fail': False}
+
+            # 버튼 생성
+            with expander_cols[0]:
+                if st.button("PASS 상세", key=f"pass_btn_{analysis_key}"):
+                    st.session_state[f'show_details_{analysis_key}']['pass'] = not st.session_state[f'show_details_{analysis_key}']['pass']
+            with expander_cols[1]:
+                if st.button("가성불량 상세", key=f"false_defect_btn_{analysis_key}"):
+                    st.session_state[f'show_details_{analysis_key}']['false_defect'] = not st.session_state[f'show_details_{analysis_key}']['false_defect']
+            with expander_cols[2]:
+                if st.button("진성불량 상세", key=f"true_defect_btn_{analysis_key}"):
+                    st.session_state[f'show_details_{analysis_key}']['true_defect'] = not st.session_state[f'show_details_{analysis_key}']['true_defect']
+            with expander_cols[3]:
+                if st.button("FAIL 상세", key=f"fail_btn_{analysis_key}"):
+                    st.session_state[f'show_details_{analysis_key}']['fail'] = not st.session_state[f'show_details_{analysis_key}']['fail']
+            
+            # 클릭된 버튼에 따라 상세 내역 표시
             for d in dates_in_jig:
                 day_group = jig_filtered_df[jig_filtered_df[date_col_name].dt.date == d]
                 date_str = d.strftime('%y%m%d')
                 
-                with st.expander(f"날짜: {date_str}", expanded=False):
-                    pass_sns = day_group.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
-                    pass_sns = pass_sns[pass_sns].index.tolist()
-                    
-                    false_defect_sns = day_group[
-                        (day_group['PassStatusNorm'] == 'X') & 
-                        (day_group['SNumber'].isin(pass_sns))
-                    ]['SNumber'].unique().tolist()
-                    
-                    true_defect_sns = day_group[
-                        (day_group['PassStatusNorm'] == 'X') & 
-                        (~day_group['SNumber'].isin(pass_sns))
-                    ]['SNumber'].unique().tolist()
-                    
-                    all_snumbers = day_group['SNumber'].unique().tolist()
-                    all_fail_sns = list(set(all_snumbers) - set(pass_sns))
-                    
-                    st.markdown(f"**PASS**: {len(pass_sns)}건")
-                    st.text("\n".join(pass_sns))
-                    
-                    st.markdown(f"**가성불량**: {len(false_defect_sns)}건")
-                    st.text("\n".join(false_defect_sns))
-                    
-                    st.markdown(f"**진성불량**: {len(true_defect_sns)}건")
-                    st.text("\n".join(true_defect_sns))
-                    
-                    st.markdown(f"**FAIL**: {len(all_fail_sns)}건")
-                    st.text("\n".join(all_fail_sns))
+                pass_sns = day_group.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
+                pass_sns = pass_sns[pass_sns].index.tolist()
+                
+                if st.session_state[f'show_details_{analysis_key}']['pass']:
+                    with st.expander(f"PASS ({date_str}) - {len(pass_sns)}건", expanded=True):
+                        st.text("\n".join(pass_sns))
+                
+                false_defect_sns = day_group[
+                    (day_group['PassStatusNorm'] == 'X') & 
+                    (day_group['SNumber'].isin(pass_sns))
+                ]['SNumber'].unique().tolist()
+
+                if st.session_state[f'show_details_{analysis_key}']['false_defect']:
+                    with st.expander(f"가성불량 ({date_str}) - {len(false_defect_sns)}건", expanded=True):
+                        st.text("\n".join(false_defect_sns))
+
+                true_defect_sns = day_group[
+                    (day_group['PassStatusNorm'] == 'X') & 
+                    (~day_group['SNumber'].isin(pass_sns))
+                ]['SNumber'].unique().tolist()
+
+                if st.session_state[f'show_details_{analysis_key}']['true_defect']:
+                    with st.expander(f"진성불량 ({date_str}) - {len(true_defect_sns)}건", expanded=True):
+                        st.text("\n".join(true_defect_sns))
+
+                all_snumbers = day_group['SNumber'].unique().tolist()
+                all_fail_sns = list(set(all_snumbers) - set(pass_sns))
+
+                if st.session_state[f'show_details_{analysis_key}']['fail']:
+                    with st.expander(f"FAIL ({date_str}) - {len(all_fail_sns)}건", expanded=True):
+                        st.text("\n".join(all_fail_sns))
         
         st.markdown("---")  # 각 지그 구분선
 
