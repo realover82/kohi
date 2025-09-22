@@ -224,7 +224,8 @@ def display_analysis_result(analysis_key, table_name, date_col_name, selected_ji
     st.subheader("그래프")
     
     chart_data_raw = report_df.set_index('지표').T
-    chart_data = chart_data_raw[['총 테스트 수', 'PASS', 'FAIL']].copy()
+    # 가성불량과 진성불량 필드를 추가
+    chart_data = chart_data_raw[['총 테스트 수', 'PASS', 'FAIL', '가성불량', '진성불량']].copy()
 
     col1, col2 = st.columns(2)
     with col1:
@@ -295,6 +296,10 @@ def main():
             'semi': {'results': pd.DataFrame(), 'show': False},
             'func': {'results': pd.DataFrame(), 'show': False},
         }
+    if 'selected_cols' not in st.session_state:
+        st.session_state.selected_cols = {
+            'pcb': [], 'fw': [], 'rftx': [], 'semi': [], 'func': []
+        }
 
     # --- 탭별 분석 기능 ---
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["파일 PCB 분석", "파일 Fw 분석", "파일 RfTx 분석", "파일 Semi 분석", "파일 Func 분석"])
@@ -345,6 +350,9 @@ def main():
                 if df_all_data is not None and not df_all_data.empty:
                     st.success("파일이 성공적으로 로드되었습니다.")
                     st.session_state.analysis_results[key] = df_all_data.copy()
+                    
+                    # 모든 컬럼 목록을 세션 상태에 저장
+                    st.session_state.selected_cols[key] = df_all_data.columns.tolist()
                 else:
                     st.warning("유효한 데이터를 불러오지 못했습니다. 올바른 형식의 파일인지 확인해주세요.")
                     st.session_state.analysis_results[key] = None
@@ -399,6 +407,16 @@ def main():
                 
                 st.markdown("---")
                 st.markdown(f"#### {tabs_config[key]['header'].split()[1]} 데이터 조회")
+                
+                # 필드 선택 기능 추가
+                all_cols = st.session_state.analysis_results[key].columns.tolist()
+                selected_display_cols = st.multiselect(
+                    "표시할 필드를 선택하세요",
+                    options=all_cols,
+                    default=[col for col in ['SNumber', 'PcbStartTime', 'PcbPass', 'PcbSleepCurr'] if col in all_cols],
+                    key=f"col_select_{key}"
+                )
+                
                 snumber_query = st.text_input("SNumber를 입력하세요", key=f"snumber_search_bar_{key}")
                 
                 col_search_btn, col_view_btn = st.columns(2)
@@ -436,10 +454,10 @@ def main():
                             st.session_state.original_db_view[key]['results'] = pd.DataFrame()
 
                 if st.session_state.snumber_search[key]['show'] and not st.session_state.snumber_search[key]['results'].empty:
-                    st.dataframe(st.session_state.snumber_search[key]['results'].reset_index(drop=True))
+                    st.dataframe(st.session_state.snumber_search[key]['results'][selected_display_cols].reset_index(drop=True))
 
                 if st.session_state.original_db_view[key]['show'] and not st.session_state.original_db_view[key]['results'].empty:
-                    st.dataframe(st.session_state.original_db_view[key]['results'].reset_index(drop=True))
+                    st.dataframe(st.session_state.original_db_view[key]['results'][selected_display_cols].reset_index(drop=True))
 
 if __name__ == "__main__":
     main()
