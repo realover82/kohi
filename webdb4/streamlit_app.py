@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-import altair as alt  # altair 라이브러리 import 추가
+import altair as alt
 
 # 각 CSV 분석 모듈 불러오기
 from csv2 import read_csv_with_dynamic_header, analyze_data
@@ -48,8 +48,6 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
     st.markdown("---")
 
     # --- 요약 대시보드 ---
-    st.subheader("일별 요약 테이블")
-    
     jigs_to_display = jig_list if selected_jig == "전체" else [selected_jig]
     
     # 날짜 범위에 따른 테이블 및 차트 데이터 생성
@@ -59,18 +57,21 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
     for date_obj in filtered_dates:
         daily_totals = {key: 0 for key in ['total_test', 'pass', 'false_defect', 'true_defect', 'fail']}
         
+        # 선택된 모든 jig에 대해 하루치 데이터를 합산
         for jig in jigs_to_display:
             data_point = summary_data.get(jig, {}).get(date_obj.strftime('%Y-%m-%d'))
             if data_point:
                 for key in daily_totals:
                     daily_totals[key] += data_point.get(key, 0)
         
-        date_str = date_obj.strftime('%y%m%d')
-        report_data[date_str] = [
+        # 테이블 데이터 추가 (일별)
+        date_str_col = date_obj.strftime('%y%m%d')
+        report_data[date_str_col] = [
             daily_totals['total_test'], daily_totals['pass'], daily_totals['false_defect'],
             daily_totals['true_defect'], daily_totals['fail']
         ]
         
+        # 차트 데이터 추가 (일별 합산 데이터)
         daily_chart_data.append({
             'date': date_obj,
             'PASS': daily_totals['pass'],
@@ -79,37 +80,36 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
             'FAIL': daily_totals['fail']
         })
 
+    st.subheader("일별 요약 테이블")
     report_df = pd.DataFrame(report_data).set_index('지표')
     st.dataframe(report_df)
 
     # --- 일별 추이 그래프 ---
     st.subheader("일별 추이 그래프")
+    chart_mode_key = f'chart_mode_{analysis_key}'
+    if chart_mode_key not in st.session_state:
+        st.session_state[chart_mode_key] = 'bar' # 기본값 설정
+
     graph_cols = st.columns(2)
     with graph_cols[0]:
         if st.button("꺾은선 그래프", key=f"line_chart_btn_{analysis_key}"):
-            st.session_state[f'chart_mode_{analysis_key}'] = 'line'
+            st.session_state[chart_mode_key] = 'line'
     with graph_cols[1]:
         if st.button("막대 그래프", key=f"bar_chart_btn_{analysis_key}"):
-            st.session_state[f'chart_mode_{analysis_key}'] = 'bar'
-
-    if f'chart_mode_{analysis_key}' not in st.session_state:
-        st.session_state[f'chart_mode_{analysis_key}'] = 'bar'
-
+            st.session_state[chart_mode_key] = 'bar'
+    
     if daily_chart_data:
         chart_df = pd.DataFrame(daily_chart_data)
-        
-        # Altair를 위한 데이터 변환 (Melt)
         chart_df_melted = chart_df.melt('date', var_name='지표', value_name='수량')
 
-        # 선택된 차트 모드에 따라 그래프 생성
-        if st.session_state[f'chart_mode_{analysis_key}'] == 'line':
+        if st.session_state[chart_mode_key] == 'line':
             chart = alt.Chart(chart_df_melted).mark_line(point=True).encode(
                 x=alt.X('date:T', axis=alt.Axis(title='날짜', format='%Y-%m-%d')),
                 y=alt.Y('수량:Q', axis=alt.Axis(title='수량')),
                 color='지표:N',
                 tooltip=['date:T', '지표', '수량']
             ).interactive()
-        else: # bar
+        else: # 'bar'
             chart = alt.Chart(chart_df_melted).mark_bar().encode(
                 x=alt.X('date:T', axis=alt.Axis(title='날짜', format='%Y-%m-%d')),
                 y=alt.Y('수량:Q', axis=alt.Axis(title='수량')),
@@ -131,7 +131,7 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
         
         for jig in jigs_to_display:
             data_point = summary_data.get(jig, {}).get(date_iso)
-            if not data_point:
+            if not data_point or data_point.get('total_test', 0) == 0:
                 continue
 
             st.markdown(f"**PC(Jig): {jig}**")
@@ -139,13 +139,14 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
             labels = ['PASS', '가성불량', '진성불량', 'FAIL']
             
             for cat, label in zip(categories, labels):
-                sns_list = data_point.get(f'{cat}_sns', [])
                 count = data_point.get(cat, 0)
-                with st.expander(f"{label} - {count}건", expanded=False):
-                    if sns_list:
-                        st.text("\n".join(sns_list))
-                    else:
-                        st.info("해당 내역이 없습니다.")
+                if count > 0: # 건수가 0보다 클 때만 expander를 표시
+                    sns_list = data_point.get(f'{cat}_sns', [])
+                    with st.expander(f"{label} - {count}건", expanded=False):
+                        if sns_list:
+                            st.text("\n".join(sns_list))
+                        else:
+                            st.info("해당 내역이 없습니다.")
         st.markdown("---")
 
 
