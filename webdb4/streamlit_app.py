@@ -174,6 +174,11 @@ def display_analysis_result(analysis_key, table_name, date_col_name, selected_ji
         st.markdown("#### 상세 내역")
         df_filtered = st.session_state.analysis_results[analysis_key]
         
+        # used_jig_col이 df_filtered에 있는지 확인
+        if used_jig_col not in df_filtered.columns:
+            st.warning(f"데이터프레임에 '{used_jig_col}' 컬럼이 없어 상세 내역을 표시할 수 없습니다.")
+            continue
+            
         # 현재 지그에 해당하는 데이터만 필터링
         jig_filtered_df = df_filtered[df_filtered[used_jig_col] == jig].copy()
         
