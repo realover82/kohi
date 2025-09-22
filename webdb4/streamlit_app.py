@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import altair as alt  # altair 라이브러리 import 추가
 
 # 각 CSV 분석 모듈 불러오기
 from csv2 import read_csv_with_dynamic_header, analyze_data
@@ -64,11 +65,12 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
                 for key in daily_totals:
                     daily_totals[key] += data_point.get(key, 0)
         
-        # 테이블 데이터 추가
         date_str = date_obj.strftime('%y%m%d')
-        report_data[date_str] = list(daily_totals.values())
+        report_data[date_str] = [
+            daily_totals['total_test'], daily_totals['pass'], daily_totals['false_defect'],
+            daily_totals['true_defect'], daily_totals['fail']
+        ]
         
-        # 차트 데이터 추가
         daily_chart_data.append({
             'date': date_obj,
             'PASS': daily_totals['pass'],
@@ -78,7 +80,7 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
         })
 
     report_df = pd.DataFrame(report_data).set_index('지표')
-    st.dataframe(report_df) # st.table 대신 st.dataframe으로 변경하여 스크롤 가능하게 함
+    st.dataframe(report_df)
 
     # --- 일별 추이 그래프 ---
     st.subheader("일별 추이 그래프")
@@ -94,11 +96,28 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
         st.session_state[f'chart_mode_{analysis_key}'] = 'bar'
 
     if daily_chart_data:
-        chart_df = pd.DataFrame(daily_chart_data).set_index('date')
+        chart_df = pd.DataFrame(daily_chart_data)
+        
+        # Altair를 위한 데이터 변환 (Melt)
+        chart_df_melted = chart_df.melt('date', var_name='지표', value_name='수량')
+
+        # 선택된 차트 모드에 따라 그래프 생성
         if st.session_state[f'chart_mode_{analysis_key}'] == 'line':
-            st.line_chart(chart_df)
-        else:
-            st.bar_chart(chart_df)
+            chart = alt.Chart(chart_df_melted).mark_line(point=True).encode(
+                x=alt.X('date:T', axis=alt.Axis(title='날짜', format='%Y-%m-%d')),
+                y=alt.Y('수량:Q', axis=alt.Axis(title='수량')),
+                color='지표:N',
+                tooltip=['date:T', '지표', '수량']
+            ).interactive()
+        else: # bar
+            chart = alt.Chart(chart_df_melted).mark_bar().encode(
+                x=alt.X('date:T', axis=alt.Axis(title='날짜', format='%Y-%m-%d')),
+                y=alt.Y('수량:Q', axis=alt.Axis(title='수량')),
+                color='지표:N',
+                tooltip=['date:T', '지표', '수량']
+            ).interactive()
+        
+        st.altair_chart(chart, use_container_width=True)
     else:
         st.info("그래프를 표시할 데이터가 없습니다.")
 
