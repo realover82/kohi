@@ -13,7 +13,7 @@ from csv_Batadc import read_csv_with_dynamic_header_for_Batadc, analyze_Batadc_d
 def display_analysis_result(analysis_key, file_name, jig_col_name):
     """ session_state에 저장된 분석 결과를 Streamlit에 표시하는 함수 """
       # 아래 한 줄을 추가합니다.
-    st.json(st.session_state.analysis_data[analysis_key][0])
+    # st.json(st.session_state.analysis_data[analysis_key][0])
 
     if st.session_state.analysis_results[analysis_key] is None:
         st.error("데이터 로드에 실패했습니다. 파일 형식을 확인해주세요.")
