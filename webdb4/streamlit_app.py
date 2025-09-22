@@ -43,7 +43,7 @@ def display_analysis_result(analysis_key, file_name):
 
     all_reports_text = ""
 
-    for jig in sorted(summary_data.keys()):
+    for jig in jigs_to_display:
         st.subheader(f"구분: {jig}")
 
         report_data = {
