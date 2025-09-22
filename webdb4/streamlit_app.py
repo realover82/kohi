@@ -38,7 +38,8 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
         end_date = st.date_input("종료 날짜", max_date, min_value=min_date, max_value=max_date, key=f"end_date_{analysis_key}")
 
     # 선택된 날짜 범위에 맞는 데이터 필터링
-    filtered_dates = [d for d in all_dates if start_date <= d.date() <= end_date]
+    # 수정: d.date() 대신 d를 사용 (이미 date 객체이므로)
+    filtered_dates = [d for d in all_dates if start_date <= d <= end_date]
     if not filtered_dates:
         st.warning("선택된 날짜 범위에 해당하는 데이터가 없습니다.")
         return
