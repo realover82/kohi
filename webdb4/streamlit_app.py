@@ -20,6 +20,21 @@ def display_analysis_result(analysis_key, file_name):
     summary_data, all_dates = st.session_state.analysis_data[analysis_key]
 
     st.markdown(f"### '{file_name}' 분석 리포트")
+    
+    
+    # ✅ Jig 선택 기능 추가
+    jig_options = ["전체"] + sorted(summary_data.keys())
+    selected_jig = st.selectbox("PC (Jig) 선택", jig_options, key=f"jig_selector_{analysis_key}")
+
+    # ✅ Jig 필터링
+    if selected_jig == "전체":
+        jigs_to_display = sorted(summary_data.keys())
+    else:
+        jigs_to_display = [selected_jig] if selected_jig in summary_data else []
+
+    if not jigs_to_display:
+        st.warning("선택한 PC (Jig)에 대한 데이터가 없습니다.")
+        return
 
     kor_date_cols = [f"{d.strftime('%y%m%d')}" for d in all_dates]
 
