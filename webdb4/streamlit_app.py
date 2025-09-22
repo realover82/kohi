@@ -11,7 +11,7 @@ from csv_Semi import read_csv_with_dynamic_header_for_Semi, analyze_Semi_data
 from csv_Batadc import read_csv_with_dynamic_header_for_Batadc, analyze_Batadc_data
 
 
-def display_analysis_result(analysis_key, file_name):
+def display_analysis_result(analysis_key, file_name, jig_col_name):
     """ session_state에 저장된 분석 결과를 Streamlit에 표시하는 함수 """
     if st.session_state.analysis_results[analysis_key] is None:
         st.error("데이터 로드에 실패했습니다. 파일 형식을 확인해주세요.")
@@ -20,30 +20,14 @@ def display_analysis_result(analysis_key, file_name):
     summary_data, all_dates = st.session_state.analysis_data[analysis_key]
 
     st.markdown(f"### '{file_name}' 분석 리포트")
-    
-    
-    # ✅ Jig 선택 기능 추가
-    jig_options = ["전체"] + sorted(summary_data.keys())
-    selected_jig = st.selectbox("PC (Jig) 선택", jig_options, key=f"jig_selector_{analysis_key}")
-
-    # ✅ Jig 필터링
-    if selected_jig == "전체":
-        jigs_to_display = sorted(summary_data.keys())
-    else:
-        jigs_to_display = [selected_jig] if selected_jig in summary_data else []
-
-    if not jigs_to_display:
-        st.warning("선택한 PC (Jig)에 대한 데이터가 없습니다.")
-        return
 
     kor_date_cols = [f"{d.strftime('%y%m%d')}" for d in all_dates]
-
     st.write(f"**분석 시간**: {st.session_state.analysis_time[analysis_key]}")
     st.markdown("---")
 
     all_reports_text = ""
 
-    for jig in jigs_to_display:
+    for jig in sorted(summary_data.keys()):
         st.subheader(f"구분: {jig}")
 
         report_data = {
@@ -66,52 +50,46 @@ def display_analysis_result(analysis_key, file_name):
         report_df = pd.DataFrame(report_data)
         st.table(report_df)
         all_reports_text += report_df.to_csv(index=False) + "\n"
-        
-        # ✅ Jig 기준 데이터 필터링 (집계와 동일하게)
+
+        # ==============================
+        # 상세 내역 (PC/Jig 별 필터 적용)
+        # ==============================
         df_filtered = st.session_state.analysis_results[analysis_key]
         if jig_col_name in df_filtered.columns:
             jig_filtered_df = df_filtered[df_filtered[jig_col_name] == jig].copy()
         else:
             jig_filtered_df = df_filtered.copy()
 
-        # ✅ 상세내역 버튼 상태 저장
-        detail_key = f"show_detail_{analysis_key}_{jig}"
-        if detail_key not in st.session_state:
-            st.session_state[detail_key] = False
-
-        if st.button(f"상세내역 보기 ({jig})", key=f"btn_{analysis_key}_{jig}"):
-            st.session_state[detail_key] = not st.session_state[detail_key]
-
-        if st.session_state[detail_key] and not jig_filtered_df.empty:
-            st.markdown("#### 상세 내역")
-
-            # PASS
+        if not jig_filtered_df.empty:
+            # PASS 상세 내역
             pass_sns = jig_filtered_df.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
             pass_sns = pass_sns[pass_sns].index.tolist()
             with st.expander(f"PASS ({len(pass_sns)}건)", expanded=False):
                 st.text("\n".join(pass_sns))
 
-            # 가성불량
+            # 가성불량 상세 내역
             false_defect_sns = jig_filtered_df[
-                (jig_filtered_df['PassStatusNorm'] == 'X') & (jig_filtered_df['SNumber'].isin(pass_sns))
+                (jig_filtered_df['PassStatusNorm'] == 'X') & 
+                (jig_filtered_df['SNumber'].isin(pass_sns))
             ]['SNumber'].unique().tolist()
             with st.expander(f"가성불량 ({len(false_defect_sns)}건)", expanded=False):
                 st.text("\n".join(false_defect_sns))
 
-            # 진성불량
+            # 진성불량 상세 내역
             true_defect_sns = jig_filtered_df[
-                (jig_filtered_df['PassStatusNorm'] == 'X') & (~jig_filtered_df['SNumber'].isin(pass_sns))
+                (jig_filtered_df['PassStatusNorm'] == 'X') & 
+                (~jig_filtered_df['SNumber'].isin(pass_sns))
             ]['SNumber'].unique().tolist()
             with st.expander(f"진성불량 ({len(true_defect_sns)}건)", expanded=False):
                 st.text("\n".join(true_defect_sns))
 
-            # FAIL
+            # FAIL 상세 내역
             all_snumbers = jig_filtered_df['SNumber'].unique().tolist()
             all_fail_sns = list(set(all_snumbers) - set(pass_sns))
             with st.expander(f"FAIL ({len(all_fail_sns)}건)", expanded=False):
                 st.text("\n".join(all_fail_sns))
 
-            st.markdown("---")
+        st.markdown("---")  # 각 지그 구분선
 
     st.success("분석이 완료되었습니다!")
 
@@ -186,7 +164,7 @@ def main():
                 else:
                     st.error("PCB 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['pcb'] is not None:
-            display_analysis_result('pcb', st.session_state.uploaded_files['pcb'].name)#, 'PcbMaxIrPwr')
+            display_analysis_result('pcb', st.session_state.uploaded_files['pcb'].name, 'PcbMaxIrPwr')
 
     # Fw
     with tab2:
@@ -204,7 +182,7 @@ def main():
                 else:
                     st.error("Fw 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['fw'] is not None:
-            display_analysis_result('fw', st.session_state.uploaded_files['fw'].name)#, 'FwPC')
+            display_analysis_result('fw', st.session_state.uploaded_files['fw'].name, 'FwPC')
 
     # RfTx
     with tab3:
@@ -222,7 +200,7 @@ def main():
                 else:
                     st.error("RfTx 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['rftx'] is not None:
-            display_analysis_result('rftx', st.session_state.uploaded_files['rftx'].name)#, 'RfTxPC')
+            display_analysis_result('rftx', st.session_state.uploaded_files['rftx'].name, 'RfTxPC')
 
     # Semi
     with tab4:
@@ -240,7 +218,7 @@ def main():
                 else:
                     st.error("Semi 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['semi'] is not None:
-            display_analysis_result('semi', st.session_state.uploaded_files['semi'].name)#, 'SemiAssyMaxSolarVolt')
+            display_analysis_result('semi', st.session_state.uploaded_files['semi'].name, 'SemiAssyMaxBatVolt')
 
     # Func
     with tab5:
@@ -258,7 +236,7 @@ def main():
                 else:
                     st.error("Func 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['func'] is not None:
-            display_analysis_result('func', st.session_state.uploaded_files['func'].name)#, 'BatadcPC')
+            display_analysis_result('func', st.session_state.uploaded_files['func'].name, 'BatadcPC')
 
 
 if __name__ == "__main__":
