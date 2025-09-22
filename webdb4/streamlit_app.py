@@ -47,31 +47,28 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
     st.write(f"**분석 시간**: {st.session_state.analysis_time[analysis_key]}")
     st.markdown("---")
 
-    # --- 요약 대시보드 ---
+    # --- 데이터 집계 및 대시보드 ---
     jigs_to_display = jig_list if selected_jig == "전체" else [selected_jig]
     
-    # 날짜 범위에 따른 테이블 및 차트 데이터 생성
     report_data = {'지표': ['총 테스트 수', 'PASS', '가성불량', '진성불량', 'FAIL']}
     daily_chart_data = []
 
+    # 날짜를 기준으로 먼저 반복하여 일별 데이터 합산
     for date_obj in filtered_dates:
         daily_totals = {key: 0 for key in ['total_test', 'pass', 'false_defect', 'true_defect', 'fail']}
         
-        # 선택된 모든 jig에 대해 하루치 데이터를 합산
         for jig in jigs_to_display:
             data_point = summary_data.get(jig, {}).get(date_obj.strftime('%Y-%m-%d'))
             if data_point:
                 for key in daily_totals:
                     daily_totals[key] += data_point.get(key, 0)
         
-        # 테이블 데이터 추가 (일별)
         date_str_col = date_obj.strftime('%y%m%d')
         report_data[date_str_col] = [
             daily_totals['total_test'], daily_totals['pass'], daily_totals['false_defect'],
             daily_totals['true_defect'], daily_totals['fail']
         ]
         
-        # 차트 데이터 추가 (일별 합산 데이터)
         daily_chart_data.append({
             'date': date_obj,
             'PASS': daily_totals['pass'],
@@ -80,6 +77,7 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
             'FAIL': daily_totals['fail']
         })
 
+    # --- 일별 요약 테이블 ---
     st.subheader("일별 요약 테이블")
     report_df = pd.DataFrame(report_data).set_index('지표')
     st.dataframe(report_df)
@@ -88,7 +86,7 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
     st.subheader("일별 추이 그래프")
     chart_mode_key = f'chart_mode_{analysis_key}'
     if chart_mode_key not in st.session_state:
-        st.session_state[chart_mode_key] = 'bar' # 기본값 설정
+        st.session_state[chart_mode_key] = 'bar'
 
     graph_cols = st.columns(2)
     with graph_cols[0]:
@@ -102,22 +100,17 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
         chart_df = pd.DataFrame(daily_chart_data)
         chart_df_melted = chart_df.melt('date', var_name='지표', value_name='수량')
 
+        common_chart = alt.Chart(chart_df_melted).encode(
+            x=alt.X('date:T', axis=alt.Axis(title='날짜', format='%Y-%m-%d')),
+            y=alt.Y('수량:Q', axis=alt.Axis(title='수량')),
+            color='지표:N',
+            tooltip=['date:T', '지표', '수량']
+        ).interactive()
+
         if st.session_state[chart_mode_key] == 'line':
-            chart = alt.Chart(chart_df_melted).mark_line(point=True).encode(
-                x=alt.X('date:T', axis=alt.Axis(title='날짜', format='%Y-%m-%d')),
-                y=alt.Y('수량:Q', axis=alt.Axis(title='수량')),
-                color='지표:N',
-                tooltip=['date:T', '지표', '수량']
-            ).interactive()
-        else: # 'bar'
-            chart = alt.Chart(chart_df_melted).mark_bar().encode(
-                x=alt.X('date:T', axis=alt.Axis(title='날짜', format='%Y-%m-%d')),
-                y=alt.Y('수량:Q', axis=alt.Axis(title='수량')),
-                color='지표:N',
-                tooltip=['date:T', '지표', '수량']
-            ).interactive()
-        
-        st.altair_chart(chart, use_container_width=True)
+            st.altair_chart(common_chart.mark_line(point=True), use_container_width=True)
+        else:
+            st.altair_chart(common_chart.mark_bar(), use_container_width=True)
     else:
         st.info("그래프를 표시할 데이터가 없습니다.")
 
@@ -140,7 +133,7 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
             
             for cat, label in zip(categories, labels):
                 count = data_point.get(cat, 0)
-                if count > 0: # 건수가 0보다 클 때만 expander를 표시
+                if count > 0:
                     sns_list = data_point.get(f'{cat}_sns', [])
                     with st.expander(f"{label} - {count}건", expanded=False):
                         if sns_list:
