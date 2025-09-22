@@ -67,51 +67,51 @@ def display_analysis_result(analysis_key, file_name):
         st.table(report_df)
         all_reports_text += report_df.to_csv(index=False) + "\n"
         
-        # ✅ 상세내역 토글 (세션 상태 기반)
-    detail_key = f"show_detail_{analysis_key}_{jig}"
-    if detail_key not in st.session_state:
-        st.session_state[detail_key] = False
+        # ✅ Jig 기준 데이터 필터링 (집계와 동일하게)
+        df_filtered = st.session_state.analysis_results[analysis_key]
+        if jig_col_name in df_filtered.columns:
+            jig_filtered_df = df_filtered[df_filtered[jig_col_name] == jig].copy()
+        else:
+            jig_filtered_df = df_filtered.copy()
 
-    if st.button(f"상세내역 보기 ({jig})", key=f"btn_{analysis_key}_{jig}"):
-        st.session_state[detail_key] = not st.session_state[detail_key]
+        # ✅ 상세내역 버튼 상태 저장
+        detail_key = f"show_detail_{analysis_key}_{jig}"
+        if detail_key not in st.session_state:
+            st.session_state[detail_key] = False
 
-    # ✅ Jig별 데이터 필터링 (PC 구분과 일치하도록)
-    jig_filtered_df = st.session_state.analysis_results[analysis_key]
-    if 'Jig' in jig_filtered_df.columns:
-        jig_filtered_df = jig_filtered_df[jig_filtered_df['Jig'] == jig].copy()
-    elif 'PC' in jig_filtered_df.columns:  # 혹시 Jig 대신 PC 컬럼이면
-        jig_filtered_df = jig_filtered_df[jig_filtered_df['PC'] == jig].copy()
+        if st.button(f"상세내역 보기 ({jig})", key=f"btn_{analysis_key}_{jig}"):
+            st.session_state[detail_key] = not st.session_state[detail_key]
 
-    if st.session_state[detail_key] and not jig_filtered_df.empty:
-        st.markdown("#### 상세 내역")
+        if st.session_state[detail_key] and not jig_filtered_df.empty:
+            st.markdown("#### 상세 내역")
 
-        # PASS 상세 내역
-        pass_sns = jig_filtered_df.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
-        pass_sns = pass_sns[pass_sns].index.tolist()
-        with st.expander(f"PASS ({len(pass_sns)}건)", expanded=False):
-            st.text("\n".join(pass_sns))
+            # PASS
+            pass_sns = jig_filtered_df.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
+            pass_sns = pass_sns[pass_sns].index.tolist()
+            with st.expander(f"PASS ({len(pass_sns)}건)", expanded=False):
+                st.text("\n".join(pass_sns))
 
-        # 가성불량 상세 내역
-        false_defect_sns = jig_filtered_df[
-            (jig_filtered_df['PassStatusNorm'] == 'X') & (jig_filtered_df['SNumber'].isin(pass_sns))
-        ]['SNumber'].unique().tolist()
-        with st.expander(f"가성불량 ({len(false_defect_sns)}건)", expanded=False):
-            st.text("\n".join(false_defect_sns))
+            # 가성불량
+            false_defect_sns = jig_filtered_df[
+                (jig_filtered_df['PassStatusNorm'] == 'X') & (jig_filtered_df['SNumber'].isin(pass_sns))
+            ]['SNumber'].unique().tolist()
+            with st.expander(f"가성불량 ({len(false_defect_sns)}건)", expanded=False):
+                st.text("\n".join(false_defect_sns))
 
-        # 진성불량 상세 내역
-        true_defect_sns = jig_filtered_df[
-            (jig_filtered_df['PassStatusNorm'] == 'X') & (~jig_filtered_df['SNumber'].isin(pass_sns))
-        ]['SNumber'].unique().tolist()
-        with st.expander(f"진성불량 ({len(true_defect_sns)}건)", expanded=False):
-            st.text("\n".join(true_defect_sns))
+            # 진성불량
+            true_defect_sns = jig_filtered_df[
+                (jig_filtered_df['PassStatusNorm'] == 'X') & (~jig_filtered_df['SNumber'].isin(pass_sns))
+            ]['SNumber'].unique().tolist()
+            with st.expander(f"진성불량 ({len(true_defect_sns)}건)", expanded=False):
+                st.text("\n".join(true_defect_sns))
 
-        # FAIL 상세 내역
-        all_snumbers = jig_filtered_df['SNumber'].unique().tolist()
-        all_fail_sns = list(set(all_snumbers) - set(pass_sns))
-        with st.expander(f"FAIL ({len(all_fail_sns)}건)", expanded=False):
-            st.text("\n".join(all_fail_sns))
+            # FAIL
+            all_snumbers = jig_filtered_df['SNumber'].unique().tolist()
+            all_fail_sns = list(set(all_snumbers) - set(pass_sns))
+            with st.expander(f"FAIL ({len(all_fail_sns)}건)", expanded=False):
+                st.text("\n".join(all_fail_sns))
 
-        st.markdown("---")
+            st.markdown("---")
 
     st.success("분석이 완료되었습니다!")
 
@@ -186,7 +186,7 @@ def main():
                 else:
                     st.error("PCB 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['pcb'] is not None:
-            display_analysis_result('pcb', st.session_state.uploaded_files['pcb'].name)
+            display_analysis_result('pcb', st.session_state.uploaded_files['pcb'].name, 'PcbPC')
 
     # Fw
     with tab2:
@@ -204,7 +204,7 @@ def main():
                 else:
                     st.error("Fw 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['fw'] is not None:
-            display_analysis_result('fw', st.session_state.uploaded_files['fw'].name)
+            display_analysis_result('fw', st.session_state.uploaded_files['fw'].name, 'FwPC')
 
     # RfTx
     with tab3:
@@ -222,7 +222,7 @@ def main():
                 else:
                     st.error("RfTx 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['rftx'] is not None:
-            display_analysis_result('rftx', st.session_state.uploaded_files['rftx'].name)
+            display_analysis_result('rftx', st.session_state.uploaded_files['rftx'].name, 'RfTxPC')
 
     # Semi
     with tab4:
@@ -240,7 +240,7 @@ def main():
                 else:
                     st.error("Semi 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['semi'] is not None:
-            display_analysis_result('semi', st.session_state.uploaded_files['semi'].name)
+            display_analysis_result('semi', st.session_state.uploaded_files['semi'].name, 'SemiAssyMaxSolarVolt')
 
     # Func
     with tab5:
@@ -258,7 +258,7 @@ def main():
                 else:
                     st.error("Func 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['func'] is not None:
-            display_analysis_result('func', st.session_state.uploaded_files['func'].name)
+            display_analysis_result('func', st.session_state.uploaded_files['func'].name, 'BatadcPC')
 
 
 if __name__ == "__main__":
