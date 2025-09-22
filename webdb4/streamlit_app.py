@@ -38,7 +38,6 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
         end_date = st.date_input("종료 날짜", max_date, min_value=min_date, max_value=max_date, key=f"end_date_{analysis_key}")
 
     # 선택된 날짜 범위에 맞는 데이터 필터링
-    # 수정: d.date() 대신 d를 사용 (이미 date 객체이므로)
     filtered_dates = [d for d in all_dates if start_date <= d <= end_date]
     if not filtered_dates:
         st.warning("선택된 날짜 범위에 해당하는 데이터가 없습니다.")
@@ -149,7 +148,6 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
                 st.session_state[f'show_details_{analysis_key}']['fail'] = not st.session_state[f'show_details_{analysis_key}']['fail']
         
         # 클릭된 버튼에 따라 상세 내역 표시
-        # 날짜별로 상세 내역을 보여주는 로직은 그대로 유지하되, 필터링된 날짜만 사용합니다.
         for d in filtered_dates:
             date_iso = d.strftime('%Y-%m-%d')
             data_point = summary_data.get(jig, {}).get(date_iso)
@@ -157,24 +155,29 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
             if data_point:
                 date_str = d.strftime('%y%m%d')
                 
+                # 수정: len() 대신 summary_data에서 직접 값을 가져와 사용
                 if st.session_state[f'show_details_{analysis_key}']['pass']:
                     pass_sns_list = data_point.get('pass_sns', [])
-                    with st.expander(f"PASS ({date_str}) - {len(pass_sns_list)}건", expanded=True):
+                    pass_count = data_point.get('pass', 0)
+                    with st.expander(f"PASS ({date_str}) - {pass_count}건", expanded=True):
                         st.text("\n".join(pass_sns_list))
                 
                 if st.session_state[f'show_details_{analysis_key}']['false_defect']:
                     false_defect_sns_list = data_point.get('false_defect_sns', [])
-                    with st.expander(f"가성불량 ({date_str}) - {len(false_defect_sns_list)}건", expanded=True):
+                    false_defect_count = data_point.get('false_defect', 0)
+                    with st.expander(f"가성불량 ({date_str}) - {false_defect_count}건", expanded=True):
                         st.text("\n".join(false_defect_sns_list))
 
                 if st.session_state[f'show_details_{analysis_key}']['true_defect']:
                     true_defect_sns_list = data_point.get('true_defect_sns', [])
-                    with st.expander(f"진성불량 ({date_str}) - {len(true_defect_sns_list)}건", expanded=True):
+                    true_defect_count = data_point.get('true_defect', 0)
+                    with st.expander(f"진성불량 ({date_str}) - {true_defect_count}건", expanded=True):
                         st.text("\n".join(true_defect_sns_list))
 
                 if st.session_state[f'show_details_{analysis_key}']['fail']:
                     fail_sns_list = data_point.get('fail_sns', [])
-                    with st.expander(f"FAIL ({date_str}) - {len(fail_sns_list)}건", expanded=True):
+                    fail_count = data_point.get('fail', 0)
+                    with st.expander(f"FAIL ({date_str}) - {fail_count}건", expanded=True):
                         st.text("\n".join(fail_sns_list))
 
         st.markdown("---") # 각 지그 구분선
