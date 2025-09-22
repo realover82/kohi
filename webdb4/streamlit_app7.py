@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import io
 
 # 각 CSV 분석 모듈 불러오기
 from csv2 import read_csv_with_dynamic_header, analyze_data
@@ -10,21 +11,18 @@ from csv_Semi import read_csv_with_dynamic_header_for_Semi, analyze_Semi_data
 from csv_Batadc import read_csv_with_dynamic_header_for_Batadc, analyze_Batadc_data
 
 
-# ==============================
-# 분석 결과 표시 함수
-# ==============================
-def display_analysis_result(analysis_key, file_name, jig_col_name, date_col_name):
+def display_analysis_result(analysis_key, file_name, jig_col_name):
     """ session_state에 저장된 분석 결과를 Streamlit에 표시하는 함수 """
     if st.session_state.analysis_results[analysis_key] is None:
         st.error("데이터 로드에 실패했습니다. 파일 형식을 확인해주세요.")
         return
 
     summary_data, all_dates = st.session_state.analysis_data[analysis_key]
-    df_filtered = st.session_state.analysis_results[analysis_key]
 
     st.markdown(f"### '{file_name}' 분석 리포트")
 
     # Jig 목록 추출
+    df_filtered = st.session_state.analysis_results[analysis_key]
     jig_list = sorted(df_filtered[jig_col_name].dropna().unique().tolist()) if jig_col_name in df_filtered.columns else []
 
     # PC(Jig) 선택 UI
@@ -64,53 +62,40 @@ def display_analysis_result(analysis_key, file_name, jig_col_name, date_col_name
         st.table(report_df)
         all_reports_text += report_df.to_csv(index=False) + "\n"
 
-        # ==============================
-        # 상세 내역 (선택된 Jig + 날짜 선택)
-        # ==============================
+        # 상세 내역 (선택된 Jig에 맞게 필터링)
         if jig_col_name in df_filtered.columns:
             jig_filtered_df = df_filtered[df_filtered[jig_col_name] == jig].copy()
         else:
             jig_filtered_df = df_filtered.copy()
 
         if not jig_filtered_df.empty:
-            # 날짜 선택 UI
-            available_dates = sorted(jig_filtered_df[date_col_name].unique().tolist())
-            selected_date = st.radio(
-                f"{jig} - 날짜 선택",
-                available_dates,
-                key=f"{analysis_key}_{jig}_date"
-            )
+            # PASS 상세 내역
+            pass_sns = jig_filtered_df.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
+            pass_sns = pass_sns[pass_sns].index.tolist()
+            with st.expander(f"PASS ({len(pass_sns)}건)", expanded=False):
+                st.text("\n".join(pass_sns))
 
-            date_filtered_df = jig_filtered_df[jig_filtered_df[date_col_name] == selected_date]
+            # 가성불량 상세 내역
+            false_defect_sns = jig_filtered_df[
+                (jig_filtered_df['PassStatusNorm'] == 'X') & 
+                (jig_filtered_df['SNumber'].isin(pass_sns))
+            ]['SNumber'].unique().tolist()
+            with st.expander(f"가성불량 ({len(false_defect_sns)}건)", expanded=False):
+                st.text("\n".join(false_defect_sns))
 
-            if not date_filtered_df.empty:
-                # PASS 상세 내역
-                pass_sns = date_filtered_df.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
-                pass_sns = pass_sns[pass_sns].index.tolist()
-                with st.expander(f"PASS ({len(pass_sns)}건)", expanded=False):
-                    st.text("\n".join(pass_sns))
+            # 진성불량 상세 내역
+            true_defect_sns = jig_filtered_df[
+                (jig_filtered_df['PassStatusNorm'] == 'X') & 
+                (~jig_filtered_df['SNumber'].isin(pass_sns))
+            ]['SNumber'].unique().tolist()
+            with st.expander(f"진성불량 ({len(true_defect_sns)}건)", expanded=False):
+                st.text("\n".join(true_defect_sns))
 
-                # 가성불량 상세 내역
-                false_defect_sns = date_filtered_df[
-                    (date_filtered_df['PassStatusNorm'] == 'X') &
-                    (date_filtered_df['SNumber'].isin(pass_sns))
-                ]['SNumber'].unique().tolist()
-                with st.expander(f"가성불량 ({len(false_defect_sns)}건)", expanded=False):
-                    st.text("\n".join(false_defect_sns))
-
-                # 진성불량 상세 내역
-                true_defect_sns = date_filtered_df[
-                    (date_filtered_df['PassStatusNorm'] == 'X') &
-                    (~date_filtered_df['SNumber'].isin(pass_sns))
-                ]['SNumber'].unique().tolist()
-                with st.expander(f"진성불량 ({len(true_defect_sns)}건)", expanded=False):
-                    st.text("\n".join(true_defect_sns))
-
-                # FAIL 상세 내역
-                all_snumbers = date_filtered_df['SNumber'].unique().tolist()
-                all_fail_sns = list(set(all_snumbers) - set(pass_sns))
-                with st.expander(f"FAIL ({len(all_fail_sns)}건)", expanded=False):
-                    st.text("\n".join(all_fail_sns))
+            # FAIL 상세 내역
+            all_snumbers = jig_filtered_df['SNumber'].unique().tolist()
+            all_fail_sns = list(set(all_snumbers) - set(pass_sns))
+            with st.expander(f"FAIL ({len(all_fail_sns)}건)", expanded=False):
+                st.text("\n".join(all_fail_sns))
 
         st.markdown("---")  # 각 지그 구분선
 
@@ -123,6 +108,7 @@ def display_analysis_result(analysis_key, file_name, jig_col_name, date_col_name
         file_name=f"{file_name}_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mime="text/csv",
     )
+
 
 
 # ==============================
@@ -187,8 +173,7 @@ def main():
                 else:
                     st.error("PCB 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['pcb'] is not None:
-            file_name = st.session_state.uploaded_files['pcb'].name if st.session_state.uploaded_files['pcb'] else "pcb_data.csv"
-            display_analysis_result('pcb', file_name, 'PcbMaxIrPwr', 'TestDate')
+            display_analysis_result('pcb', st.session_state.uploaded_files['pcb'].name, 'PcbMaxIrPwr')
 
     # Fw
     with tab2:
@@ -206,8 +191,7 @@ def main():
                 else:
                     st.error("Fw 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['fw'] is not None:
-            file_name = st.session_state.uploaded_files['fw'].name if st.session_state.uploaded_files['fw'] else "fw_data.csv"
-            display_analysis_result('fw', file_name, 'FwPC', 'TestDate')
+            display_analysis_result('fw', st.session_state.uploaded_files['fw'].name, 'FwPC')
 
     # RfTx
     with tab3:
@@ -225,8 +209,7 @@ def main():
                 else:
                     st.error("RfTx 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['rftx'] is not None:
-            file_name = st.session_state.uploaded_files['rftx'].name if st.session_state.uploaded_files['rftx'] else "rftx_data.csv"
-            display_analysis_result('rftx', file_name, 'RfTxPC', 'TestDate')
+            display_analysis_result('rftx', st.session_state.uploaded_files['rftx'].name, 'RfTxPC')
 
     # Semi
     with tab4:
@@ -244,8 +227,7 @@ def main():
                 else:
                     st.error("Semi 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['semi'] is not None:
-            file_name = st.session_state.uploaded_files['semi'].name if st.session_state.uploaded_files['semi'] else "semi_data.csv"
-            display_analysis_result('semi', file_name, 'SemiAssyMaxBatVolt', 'TestDate')
+            display_analysis_result('semi', st.session_state.uploaded_files['semi'].name, 'SemiAssyMaxBatVolt')
 
     # Func
     with tab5:
@@ -263,8 +245,7 @@ def main():
                 else:
                     st.error("Func 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['func'] is not None:
-            file_name = st.session_state.uploaded_files['func'].name if st.session_state.uploaded_files['func'] else "func_data.csv"
-            display_analysis_result('func', file_name, 'BatadcPC', 'TestDate')
+            display_analysis_result('func', st.session_state.uploaded_files['func'].name, 'BatadcPC')
 
 
 if __name__ == "__main__":
