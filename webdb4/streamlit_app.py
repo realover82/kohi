@@ -160,25 +160,37 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
                     pass_sns_list = data_point.get('pass_sns', [])
                     pass_count = data_point.get('pass', 0)
                     with st.expander(f"PASS ({date_str}) - {pass_count}건", expanded=True):
-                        st.text("\n".join(pass_sns_list))
+                        if pass_sns_list:
+                            st.text("\n".join(pass_sns_list))
+                        else:
+                            st.text("해당 날짜에 상세 내역이 없습니다.")
                 
                 if st.session_state[f'show_details_{analysis_key}']['false_defect']:
                     false_defect_sns_list = data_point.get('false_defect_sns', [])
                     false_defect_count = data_point.get('false_defect', 0)
                     with st.expander(f"가성불량 ({date_str}) - {false_defect_count}건", expanded=True):
-                        st.text("\n".join(false_defect_sns_list))
+                        if false_defect_sns_list:
+                            st.text("\n".join(false_defect_sns_list))
+                        else:
+                            st.text("해당 날짜에 상세 내역이 없습니다.")
 
                 if st.session_state[f'show_details_{analysis_key}']['true_defect']:
                     true_defect_sns_list = data_point.get('true_defect_sns', [])
                     true_defect_count = data_point.get('true_defect', 0)
                     with st.expander(f"진성불량 ({date_str}) - {true_defect_count}건", expanded=True):
-                        st.text("\n".join(true_defect_sns_list))
+                        if true_defect_sns_list:
+                            st.text("\n".join(true_defect_sns_list))
+                        else:
+                            st.text("해당 날짜에 상세 내역이 없습니다.")
 
                 if st.session_state[f'show_details_{analysis_key}']['fail']:
                     fail_sns_list = data_point.get('fail_sns', [])
                     fail_count = data_point.get('fail', 0)
                     with st.expander(f"FAIL ({date_str}) - {fail_count}건", expanded=True):
-                        st.text("\n".join(fail_sns_list))
+                        if fail_sns_list:
+                            st.text("\n".join(fail_sns_list))
+                        else:
+                            st.text("해당 날짜에 상세 내역이 없습니다.")
 
         st.markdown("---") # 각 지그 구분선
 
