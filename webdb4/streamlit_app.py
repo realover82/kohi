@@ -21,13 +21,24 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
 
     st.markdown(f"### '{file_name}' 분석 리포트")
 
+    # Jig 목록 추출
+    df_filtered = st.session_state.analysis_results[analysis_key]
+    jig_list = sorted(df_filtered[jig_col_name].dropna().unique().tolist()) if jig_col_name in df_filtered.columns else []
+
+    # PC(Jig) 선택 UI
+    selected_jig = st.selectbox("PC(Jig) 선택", ["전체"] + jig_list, key=f"select_{analysis_key}")
+
+    # 날짜 라벨
     kor_date_cols = [f"{d.strftime('%y%m%d')}" for d in all_dates]
     st.write(f"**분석 시간**: {st.session_state.analysis_time[analysis_key]}")
     st.markdown("---")
 
     all_reports_text = ""
 
-    for jig in sorted(summary_data.keys()):
+    # 선택된 jig만 보여주기
+    jigs_to_display = jig_list if selected_jig == "전체" else [selected_jig]
+
+    for jig in jigs_to_display:
         st.subheader(f"구분: {jig}")
 
         report_data = {
@@ -35,7 +46,7 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
         }
 
         for date_iso, date_str in zip([d.strftime('%Y-%m-%d') for d in all_dates], kor_date_cols):
-            data_point = summary_data[jig].get(date_iso)
+            data_point = summary_data.get(jig, {}).get(date_iso)
             if data_point:
                 report_data[date_str] = [
                     data_point['total_test'],
@@ -51,10 +62,7 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
         st.table(report_df)
         all_reports_text += report_df.to_csv(index=False) + "\n"
 
-        # ==============================
-        # 상세 내역 (PC/Jig 별 필터 적용)
-        # ==============================
-        df_filtered = st.session_state.analysis_results[analysis_key]
+        # 상세 내역 (선택된 Jig에 맞게 필터링)
         if jig_col_name in df_filtered.columns:
             jig_filtered_df = df_filtered[df_filtered[jig_col_name] == jig].copy()
         else:
@@ -100,6 +108,7 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
         file_name=f"{file_name}_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mime="text/csv",
     )
+
 
 
 # ==============================
