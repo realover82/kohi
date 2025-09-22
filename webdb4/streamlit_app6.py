@@ -43,7 +43,7 @@ def display_analysis_result(analysis_key, file_name):
 
     all_reports_text = ""
 
-    for jig in jigs_to_display:
+    for jig in sorted(summary_data.keys()):
         st.subheader(f"구분: {jig}")
 
         report_data = {
@@ -66,52 +66,6 @@ def display_analysis_result(analysis_key, file_name):
         report_df = pd.DataFrame(report_data)
         st.table(report_df)
         all_reports_text += report_df.to_csv(index=False) + "\n"
-        
-        # ✅ 상세내역 토글 (세션 상태 기반)
-    detail_key = f"show_detail_{analysis_key}_{jig}"
-    if detail_key not in st.session_state:
-        st.session_state[detail_key] = False
-
-    if st.button(f"상세내역 보기 ({jig})", key=f"btn_{analysis_key}_{jig}"):
-        st.session_state[detail_key] = not st.session_state[detail_key]
-
-    # ✅ Jig별 데이터 필터링 (PC 구분과 일치하도록)
-    jig_filtered_df = st.session_state.analysis_results[analysis_key]
-    if 'Jig' in jig_filtered_df.columns:
-        jig_filtered_df = jig_filtered_df[jig_filtered_df['Jig'] == jig].copy()
-    elif 'PC' in jig_filtered_df.columns:  # 혹시 Jig 대신 PC 컬럼이면
-        jig_filtered_df = jig_filtered_df[jig_filtered_df['PC'] == jig].copy()
-
-    if st.session_state[detail_key] and not jig_filtered_df.empty:
-        st.markdown("#### 상세 내역")
-
-        # PASS 상세 내역
-        pass_sns = jig_filtered_df.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
-        pass_sns = pass_sns[pass_sns].index.tolist()
-        with st.expander(f"PASS ({len(pass_sns)}건)", expanded=False):
-            st.text("\n".join(pass_sns))
-
-        # 가성불량 상세 내역
-        false_defect_sns = jig_filtered_df[
-            (jig_filtered_df['PassStatusNorm'] == 'X') & (jig_filtered_df['SNumber'].isin(pass_sns))
-        ]['SNumber'].unique().tolist()
-        with st.expander(f"가성불량 ({len(false_defect_sns)}건)", expanded=False):
-            st.text("\n".join(false_defect_sns))
-
-        # 진성불량 상세 내역
-        true_defect_sns = jig_filtered_df[
-            (jig_filtered_df['PassStatusNorm'] == 'X') & (~jig_filtered_df['SNumber'].isin(pass_sns))
-        ]['SNumber'].unique().tolist()
-        with st.expander(f"진성불량 ({len(true_defect_sns)}건)", expanded=False):
-            st.text("\n".join(true_defect_sns))
-
-        # FAIL 상세 내역
-        all_snumbers = jig_filtered_df['SNumber'].unique().tolist()
-        all_fail_sns = list(set(all_snumbers) - set(pass_sns))
-        with st.expander(f"FAIL ({len(all_fail_sns)}건)", expanded=False):
-            st.text("\n".join(all_fail_sns))
-
-        st.markdown("---")
 
     st.success("분석이 완료되었습니다!")
 
