@@ -186,7 +186,7 @@ def main():
                 else:
                     st.error("PCB 데이터 파일을 읽을 수 없습니다.")
         if st.session_state.analysis_results['pcb'] is not None:
-            display_analysis_result('pcb', st.session_state.uploaded_files['pcb'].name, 'PcbPC')
+            display_analysis_result('pcb', st.session_state.uploaded_files['pcb'].name, 'PcbMaxIrPwr')
 
     # Fw
     with tab2:
