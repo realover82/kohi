@@ -69,15 +69,26 @@ def analyze_data(df, date_col_name, jig_col_name):
                     if pd.isna(d): continue
                     date_iso = pd.to_datetime(d).strftime("%Y-%m-%d")
                     
+                    # SNumber가 유효한지 확인하고, 유효한 SNumber만 필터링
+                    day_group = day_group[day_group['SNumber'].notna()]
+                    if day_group.empty:
+                        continue
+
+                    # 'PassStatusNorm'이 존재하는지 확인
+                    if 'PassStatusNorm' not in day_group.columns:
+                        continue
+                        
                     pass_sns_series = day_group.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
                     pass_sns = pass_sns_series[pass_sns_series].index.tolist()
 
                     total_test_count = len(day_group['SNumber'].unique())
                     pass_count = len(pass_sns)
-                    fail_count = total_test_count - pass_count
-
+                    
                     false_defect_count = len(day_group[(day_group['PassStatusNorm'] == 'X') & (day_group['SNumber'].isin(pass_sns))]['SNumber'].unique())
                     true_defect_count = len(day_group[(day_group['PassStatusNorm'] == 'X') & (~day_group['SNumber'].isin(pass_sns))]['SNumber'].unique())
+                    
+                    # 요청에 따라 'fail' 값 수정
+                    fail_count = false_defect_count + true_defect_count
 
                     if jig not in summary_data:
                         summary_data[jig] = {}
@@ -169,6 +180,11 @@ def display_analysis_result(analysis_key, table_name, date_col_name, selected_ji
         # SNumber가 유효한지 확인
         jig_filtered_df = jig_filtered_df[jig_filtered_df['SNumber'].notna()]
         
+        # PassStatusNorm이 존재하는지 확인
+        if 'PassStatusNorm' not in jig_filtered_df.columns:
+            st.warning("PassStatusNorm 컬럼이 없어 상세 내역을 표시할 수 없습니다.")
+            continue
+            
         # PASS 상세 내역
         pass_sns = jig_filtered_df.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
         pass_sns = pass_sns[pass_sns].index.tolist()
@@ -186,8 +202,8 @@ def display_analysis_result(analysis_key, table_name, date_col_name, selected_ji
             st.text("\n".join(true_defect_sns))
 
         # FAIL 상세 내역
-        fail_sns = jig_filtered_df['SNumber'].unique().tolist()
-        all_fail_sns = list(set(fail_sns) - set(pass_sns))
+        all_snumbers = jig_filtered_df['SNumber'].unique().tolist()
+        all_fail_sns = list(set(all_snumbers) - set(pass_sns))
         with st.expander(f"FAIL ({len(all_fail_sns)}건)", expanded=False):
             st.text("\n".join(all_fail_sns))
         
