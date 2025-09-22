@@ -69,33 +69,44 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
             jig_filtered_df = df_filtered.copy()
 
         if not jig_filtered_df.empty:
+            # 날짜 선택 UI
+            available_dates = sorted(jig_filtered_df['TestDate'].unique().tolist())
+            selected_date = st.radio(
+                f"{jig} - 날짜 선택", 
+                available_dates, 
+                key=f"{analysis_key}_{jig}_date"
+            )
+
+            date_filtered_df = jig_filtered_df[jig_filtered_df['TestDate'] == selected_date]
+
             # PASS 상세 내역
-            pass_sns = jig_filtered_df.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
+            pass_sns = date_filtered_df.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
             pass_sns = pass_sns[pass_sns].index.tolist()
             with st.expander(f"PASS ({len(pass_sns)}건)", expanded=False):
                 st.text("\n".join(pass_sns))
 
             # 가성불량 상세 내역
-            false_defect_sns = jig_filtered_df[
-                (jig_filtered_df['PassStatusNorm'] == 'X') & 
-                (jig_filtered_df['SNumber'].isin(pass_sns))
+            false_defect_sns = date_filtered_df[
+                (date_filtered_df['PassStatusNorm'] == 'X') & 
+                (date_filtered_df['SNumber'].isin(pass_sns))
             ]['SNumber'].unique().tolist()
             with st.expander(f"가성불량 ({len(false_defect_sns)}건)", expanded=False):
                 st.text("\n".join(false_defect_sns))
 
             # 진성불량 상세 내역
-            true_defect_sns = jig_filtered_df[
-                (jig_filtered_df['PassStatusNorm'] == 'X') & 
-                (~jig_filtered_df['SNumber'].isin(pass_sns))
+            true_defect_sns = date_filtered_df[
+                (date_filtered_df['PassStatusNorm'] == 'X') & 
+                (~date_filtered_df['SNumber'].isin(pass_sns))
             ]['SNumber'].unique().tolist()
             with st.expander(f"진성불량 ({len(true_defect_sns)}건)", expanded=False):
                 st.text("\n".join(true_defect_sns))
 
             # FAIL 상세 내역
-            all_snumbers = jig_filtered_df['SNumber'].unique().tolist()
+            all_snumbers = date_filtered_df['SNumber'].unique().tolist()
             all_fail_sns = list(set(all_snumbers) - set(pass_sns))
             with st.expander(f"FAIL ({len(all_fail_sns)}건)", expanded=False):
                 st.text("\n".join(all_fail_sns))
+
 
         st.markdown("---")  # 각 지그 구분선
 
