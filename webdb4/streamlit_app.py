@@ -1,15 +1,14 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import io
 
-# 각 CSV 분석 모듈 불러오기
+# 각 CSV 분석 모듈 불러오기 (기존 코드 유지)
 from csv2 import read_csv_with_dynamic_header, analyze_data
 from csv_Fw import read_csv_with_dynamic_header_for_Fw, analyze_Fw_data
 from csv_RfTx import read_csv_with_dynamic_header_for_RfTx, analyze_RfTx_data
 from csv_Semi import read_csv_with_dynamic_header_for_Semi, analyze_Semi_data
 from csv_Batadc import read_csv_with_dynamic_header_for_Batadc, analyze_Batadc_data
-
 
 def display_analysis_result(analysis_key, file_name, jig_col_name):
     """ session_state에 저장된 분석 결과를 Streamlit에 표시하는 함수 """
@@ -28,11 +27,40 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
     # PC(Jig) 선택 UI
     selected_jig = st.selectbox("PC(Jig) 선택", ["전체"] + jig_list, key=f"select_{analysis_key}")
 
-    # 날짜 라벨
-    kor_date_cols = [f"{d.strftime('%y%m%d')}" for d in all_dates]
+    # --- 날짜 필터링 기능 추가 ---
+    min_date = min(all_dates)
+    max_date = max(all_dates)
+    
+    date_range_col1, date_range_col2 = st.columns(2)
+    with date_range_col1:
+        start_date = st.date_input("시작 날짜", min_date, min_value=min_date, max_value=max_date, key=f"start_date_{analysis_key}")
+    with date_range_col2:
+        end_date = st.date_input("종료 날짜", max_date, min_value=min_date, max_value=max_date, key=f"end_date_{analysis_key}")
+
+    # 선택된 날짜 범위에 맞는 데이터 필터링
+    filtered_dates = [d for d in all_dates if start_date <= d.date() <= end_date]
+    if not filtered_dates:
+        st.warning("선택된 날짜 범위에 해당하는 데이터가 없습니다.")
+        return
+
     st.write(f"**분석 시간**: {st.session_state.analysis_time[analysis_key]}")
     st.markdown("---")
 
+    # --- 시각화 방식 선택 버튼 추가 ---
+    display_mode_cols = st.columns(3)
+    with display_mode_cols[0]:
+        if st.button("테이블", key=f"mode_table_{analysis_key}"):
+            st.session_state[f'display_mode_{analysis_key}'] = 'table'
+    with display_mode_cols[1]:
+        if st.button("꺾은선 그래프", key=f"mode_line_{analysis_key}"):
+            st.session_state[f'display_mode_{analysis_key}'] = 'line'
+    with display_mode_cols[2]:
+        if st.button("막대 그래프", key=f"mode_bar_{analysis_key}"):
+            st.session_state[f'display_mode_{analysis_key}'] = 'bar'
+
+    if f'display_mode_{analysis_key}' not in st.session_state:
+        st.session_state[f'display_mode_{analysis_key}'] = 'table'
+        
     all_reports_text = ""
 
     # 선택된 jig만 보여주기
@@ -41,30 +69,65 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
     for jig in jigs_to_display:
         st.subheader(f"구분: {jig}")
 
-        report_data = {
-            '지표': ['총 테스트 수', 'PASS', '가성불량', '진성불량', 'FAIL']
-        }
+        # --- 선택된 시각화 방식에 따라 표 또는 그래프 표시 ---
+        if st.session_state[f'display_mode_{analysis_key}'] == 'table':
+            report_data = {
+                '지표': ['총 테스트 수', 'PASS', '가성불량', '진성불량', 'FAIL']
+            }
+            kor_date_cols = [f"{d.strftime('%y%m%d')}" for d in filtered_dates]
 
-        for date_iso, date_str in zip([d.strftime('%Y-%m-%d') for d in all_dates], kor_date_cols):
-            data_point = summary_data.get(jig, {}).get(date_iso)
-            if data_point:
-                report_data[date_str] = [
-                    data_point['total_test'],
-                    data_point['pass'],
-                    data_point['false_defect'],
-                    data_point['true_defect'],
-                    data_point['fail']
-                ]
-            else:
-                report_data[date_str] = ['N/A'] * 5
+            for date_iso, date_str in zip([d.strftime('%Y-%m-%d') for d in filtered_dates], kor_date_cols):
+                data_point = summary_data.get(jig, {}).get(date_iso)
+                if data_point:
+                    report_data[date_str] = [
+                        data_point['total_test'],
+                        data_point['pass'],
+                        data_point['false_defect'],
+                        data_point['true_defect'],
+                        data_point['fail']
+                    ]
+                else:
+                    report_data[date_str] = ['N/A'] * 5
+            
+            report_df = pd.DataFrame(report_data).set_index('지표')
+            st.table(report_df)
+            all_reports_text += report_df.to_csv(index=True) + "\n"
 
-        report_df = pd.DataFrame(report_data)
-        st.table(report_df)
-        all_reports_text += report_df.to_csv(index=False) + "\n"
+        else: # 그래프 (꺾은선, 막대)
+            chart_data = {
+                '날짜': [d.strftime('%Y-%m-%d') for d in filtered_dates],
+                'PASS': [],
+                '가성불량': [],
+                '진성불량': [],
+                'FAIL': []
+            }
+            
+            for date_iso in chart_data['날짜']:
+                data_point = summary_data.get(jig, {}).get(date_iso)
+                if data_point:
+                    chart_data['PASS'].append(data_point['pass'])
+                    chart_data['가성불량'].append(data_point['false_defect'])
+                    chart_data['진성불량'].append(data_point['true_defect'])
+                    chart_data['FAIL'].append(data_point['fail'])
+                else:
+                    chart_data['PASS'].append(0)
+                    chart_data['가성불량'].append(0)
+                    chart_data['진성불량'].append(0)
+                    chart_data['FAIL'].append(0)
+            
+            chart_df = pd.DataFrame(chart_data).set_index('날짜')
+            
+            if st.session_state[f'display_mode_{analysis_key}'] == 'line':
+                st.line_chart(chart_df)
+            else: # 'bar'
+                st.bar_chart(chart_df)
 
+        st.markdown("---") # 각 지그 구분선
+        
         # 상세 내역 (날짜별로 가져오기)
         st.markdown("#### 상세 내역")
-        
+        st.markdown("---")
+
         # 버튼 클릭 상태를 저장할 딕셔너리
         if f'show_details_{analysis_key}' not in st.session_state:
             st.session_state[f'show_details_{analysis_key}'] = {'pass': False, 'false_defect': False, 'true_defect': False, 'fail': False}
@@ -85,35 +148,35 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
                 st.session_state[f'show_details_{analysis_key}']['fail'] = not st.session_state[f'show_details_{analysis_key}']['fail']
         
         # 클릭된 버튼에 따라 상세 내역 표시
-        if all_dates:
-            for d in all_dates:
-                date_iso = d.strftime('%Y-%m-%d')
-                data_point = summary_data.get(jig, {}).get(date_iso)
+        # 날짜별로 상세 내역을 보여주는 로직은 그대로 유지하되, 필터링된 날짜만 사용합니다.
+        for d in filtered_dates:
+            date_iso = d.strftime('%Y-%m-%d')
+            data_point = summary_data.get(jig, {}).get(date_iso)
+            
+            if data_point:
+                date_str = d.strftime('%y%m%d')
                 
-                if data_point:
-                    date_str = d.strftime('%y%m%d')
-                    
-                    if st.session_state[f'show_details_{analysis_key}']['pass']:
-                        pass_sns_list = data_point.get('pass_sns', [])
-                        with st.expander(f"PASS ({date_str}) - {len(pass_sns_list)}건", expanded=True):
-                            st.text("\n".join(pass_sns_list))
-                    
-                    if st.session_state[f'show_details_{analysis_key}']['false_defect']:
-                        false_defect_sns_list = data_point.get('false_defect_sns', [])
-                        with st.expander(f"가성불량 ({date_str}) - {len(false_defect_sns_list)}건", expanded=True):
-                            st.text("\n".join(false_defect_sns_list))
+                if st.session_state[f'show_details_{analysis_key}']['pass']:
+                    pass_sns_list = data_point.get('pass_sns', [])
+                    with st.expander(f"PASS ({date_str}) - {len(pass_sns_list)}건", expanded=True):
+                        st.text("\n".join(pass_sns_list))
+                
+                if st.session_state[f'show_details_{analysis_key}']['false_defect']:
+                    false_defect_sns_list = data_point.get('false_defect_sns', [])
+                    with st.expander(f"가성불량 ({date_str}) - {len(false_defect_sns_list)}건", expanded=True):
+                        st.text("\n".join(false_defect_sns_list))
 
-                    if st.session_state[f'show_details_{analysis_key}']['true_defect']:
-                        true_defect_sns_list = data_point.get('true_defect_sns', [])
-                        with st.expander(f"진성불량 ({date_str}) - {len(true_defect_sns_list)}건", expanded=True):
-                            st.text("\n".join(true_defect_sns_list))
+                if st.session_state[f'show_details_{analysis_key}']['true_defect']:
+                    true_defect_sns_list = data_point.get('true_defect_sns', [])
+                    with st.expander(f"진성불량 ({date_str}) - {len(true_defect_sns_list)}건", expanded=True):
+                        st.text("\n".join(true_defect_sns_list))
 
-                    if st.session_state[f'show_details_{analysis_key}']['fail']:
-                        fail_sns_list = data_point.get('fail_sns', [])
-                        with st.expander(f"FAIL ({date_str}) - {len(fail_sns_list)}건", expanded=True):
-                            st.text("\n".join(fail_sns_list))
-        
-        st.markdown("---")  # 각 지그 구분선
+                if st.session_state[f'show_details_{analysis_key}']['fail']:
+                    fail_sns_list = data_point.get('fail_sns', [])
+                    with st.expander(f"FAIL ({date_str}) - {len(fail_sns_list)}건", expanded=True):
+                        st.text("\n".join(fail_sns_list))
+
+        st.markdown("---") # 각 지그 구분선
 
     st.success("분석이 완료되었습니다!")
 
