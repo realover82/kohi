@@ -54,25 +54,18 @@ def analyze_data(df, date_col_name, jig_col_name):
         if 'SNumber' in df.columns and date_col_name in df.columns and not df[date_col_name].dt.date.dropna().empty:
             for jig, group in df.groupby(used_jig_col_name):
                 for d, day_group in group.groupby(group[date_col_name].dt.date):
-                    if pd.isna(d): 
-                        continue
+                    if pd.isna(d): continue
                     date_iso = pd.to_datetime(d).strftime("%Y-%m-%d")
-                    # SN 단위 PASS 여부 판정                    
+                    
                     pass_sns_series = day_group.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
                     pass_sns = pass_sns_series[pass_sns_series].index.tolist()
 
-                    
-                    # 구분 집계
                     false_defect_count = len(day_group[(day_group['PassStatusNorm'] == 'X') & (day_group['SNumber'].isin(pass_sns))]['SNumber'].unique())
                     true_defect_count = len(day_group[(day_group['PassStatusNorm'] == 'X') & (~day_group['SNumber'].isin(pass_sns))]['SNumber'].unique())
-                    
-                    false_defect_count = len(false_defect_sns)
-                    true_defect_count = len(true_defect_sns)
                     pass_count = len(pass_sns)
                     total_test = len(day_group['SNumber'].unique())
-                    fail_count = total_test - pass_count  # SN 기준 Fail 수
+                    fail_count = total_test - pass_count
 
-                    
                     if jig not in summary_data:
                         summary_data[jig] = {}
                     summary_data[jig][date_iso] = {
@@ -81,11 +74,9 @@ def analyze_data(df, date_col_name, jig_col_name):
                         'false_defect': false_defect_count,
                         'true_defect': true_defect_count,
                         'fail': fail_count,
-                        'false_defect_sns': false_defect_sns,
-                        'true_defect_sns': true_defect_sns
                     }
     
-    all_dates = sorted(list(df_copy[date_col_name].dt.date.dropna().unique()))
+    all_dates = sorted(list(df[date_col_name].dt.date.dropna().unique()))
     
     return summary_data, all_dates, used_jig_col_name
 
