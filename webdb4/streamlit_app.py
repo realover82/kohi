@@ -51,23 +51,24 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
     
     jigs_to_display = jig_list if selected_jig == "전체" else [selected_jig]
     
-    # 날짜 범위에 따른 테이블 데이터 생성
+    # 날짜 범위에 따른 테이블 및 차트 데이터 생성
     report_data = {'지표': ['총 테스트 수', 'PASS', '가성불량', '진성불량', 'FAIL']}
     daily_chart_data = []
 
     for date_obj in filtered_dates:
-        date_str = date_obj.strftime('%y%m%d')
-        date_iso = date_obj.strftime('%Y-%m-%d')
-        
-        daily_totals = {'total_test': 0, 'pass': 0, 'false_defect': 0, 'true_defect': 0, 'fail': 0}
+        daily_totals = {key: 0 for key in ['total_test', 'pass', 'false_defect', 'true_defect', 'fail']}
         
         for jig in jigs_to_display:
-            data_point = summary_data.get(jig, {}).get(date_iso)
+            data_point = summary_data.get(jig, {}).get(date_obj.strftime('%Y-%m-%d'))
             if data_point:
                 for key in daily_totals:
                     daily_totals[key] += data_point.get(key, 0)
         
+        # 테이블 데이터 추가
+        date_str = date_obj.strftime('%y%m%d')
         report_data[date_str] = list(daily_totals.values())
+        
+        # 차트 데이터 추가
         daily_chart_data.append({
             'date': date_obj,
             'PASS': daily_totals['pass'],
@@ -77,7 +78,7 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
         })
 
     report_df = pd.DataFrame(report_data).set_index('지표')
-    st.table(report_df)
+    st.dataframe(report_df) # st.table 대신 st.dataframe으로 변경하여 스크롤 가능하게 함
 
     # --- 일별 추이 그래프 ---
     st.subheader("일별 추이 그래프")
@@ -90,7 +91,7 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
             st.session_state[f'chart_mode_{analysis_key}'] = 'bar'
 
     if f'chart_mode_{analysis_key}' not in st.session_state:
-        st.session_state[f'chart_mode_{analysis_key}'] = 'bar' # 기본값은 막대 그래프
+        st.session_state[f'chart_mode_{analysis_key}'] = 'bar'
 
     if daily_chart_data:
         chart_df = pd.DataFrame(daily_chart_data).set_index('date')
@@ -165,7 +166,6 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
                      st.warning("SNumber 검색을 지원하지 않는 데이터 형식입니다.")
 
         if applied_filters['columns']:
-            # 선택된 컬럼이 df_display에 실제로 존재하는지 확인 후 필터링
             existing_cols = [col for col in applied_filters['columns'] if col in df_display.columns]
             df_display = df_display[existing_cols]
         
