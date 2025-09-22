@@ -103,7 +103,7 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
         chart_df_melted = chart_df.melt('date', var_name='지표', value_name='수량')
 
         common_chart = alt.Chart(chart_df_melted).encode(
-            x=alt.X('date:T', axis=alt.Axis(title='날짜')#, format='%Y-%m-%d')),
+            x=alt.X('date:T', axis=alt.Axis(title='날짜'),#, format='%Y-%m-%d')),
             y=alt.Y('수량:Q', axis=alt.Axis(title='수량')),
             color='지표:N',
             tooltip=['date:T', '지표', '수량']
