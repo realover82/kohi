@@ -26,53 +26,92 @@ def analyze_data(df, date_col_name, jig_col_name):
         return {}, [], jig_col_name
 
     # PassStatusNorm 컬럼 생성
-    # df_copy = df.copy()
+    df_copy = df.copy()
     
-    # PassStatusNorm 생성
-    df['PassStatusNorm'] = ""
-    if 'PcbPass' in df.columns:
-        df['PassStatusNorm'] = df['PcbPass'].fillna('').astype(str).str.strip().str.upper()
-    elif 'FwPass' in df.columns:
-        df['PassStatusNorm'] = df['FwPass'].fillna('').astype(str).str.strip().str.upper()
-    elif 'RfTxPass' in df.columns:
-        df['PassStatusNorm'] = df['RfTxPass'].fillna('').astype(str).str.strip().str.upper()
-    elif 'SemiAssyPass' in df.columns:
-        df['PassStatusNorm'] = df['SemiAssyPass'].fillna('').astype(str).str.strip().str.upper()
-    elif 'BatadcPass' in df.columns:
-        df['PassStatusNorm'] = df['BatadcPass'].fillna('').astype(str).str.strip().str.upper()
+    # 다양한 Pass 컬럼에 대해 PassStatusNorm 생성
+    pass_col_found = False
+    if 'PcbPass' in df_copy.columns:
+        df_copy['PassStatusNorm'] = df_copy['PcbPass'].fillna('').astype(str).str.strip().str.upper()
+        pass_col_found = True
+    elif 'FwPass' in df_copy.columns:
+        df_copy['PassStatusNorm'] = df_copy['FwPass'].fillna('').astype(str).str.strip().str.upper()
+        pass_col_found = True
+    elif 'RfTxPass' in df_copy.columns:
+        df_copy['PassStatusNorm'] = df_copy['RfTxPass'].fillna('').astype(str).str.strip().str.upper()
+        pass_col_found = True
+    elif 'SemiAssyPass' in df_copy.columns:
+        df_copy['PassStatusNorm'] = df_copy['SemiAssyPass'].fillna('').astype(str).str.strip().str.upper()
+        pass_col_found = True
+    elif 'BatadcPass' in df_copy.columns:
+        df_copy['PassStatusNorm'] = df_copy['BatadcPass'].fillna('').astype(str).str.strip().str.upper()
+        pass_col_found = True
+    
+    if not pass_col_found:
+        # Pass 컬럼이 없는 경우, 분석을 계속할 수 없으므로 빈 결과를 반환
+        st.warning("Pass 상태를 나타내는 컬럼이 없습니다. 다음 컬럼 중 하나가 필요합니다: PcbPass, FwPass, RfTxPass, SemiAssyPass, BatadcPass")
+        return {}, [], jig_col_name
 
     summary_data = {}
     
-    # 지그 컬럼이 비어 있으면 전체 그룹으로 묶음
+    # 지그(PC) 컬럼에 데이터가 없는 경우 '전체'를 대체 컬럼으로 사용
     used_jig_col_name = jig_col_name
-    if jig_col_name not in df.columns or df[jig_col_name].isnull().all():
+    if jig_col_name not in df_copy.columns or df_copy[jig_col_name].isnull().all() or df_copy[jig_col_name].nunique() < 2:
         used_jig_col_name = '__total_group__'
-        df[used_jig_col_name] = '전체'
+        df_copy[used_jig_col_name] = '전체'
 
     # 지그(PC) 컬럼이 존재하고 데이터가 있는 경우에만 그룹 분석 실행
-    if used_jig_col_name in df.columns and not df[used_jig_col_name].isnull().all():
-        if 'SNumber' in df.columns and date_col_name in df.columns and not df[date_col_name].dt.date.dropna().empty:
-            for jig, group in df.groupby(used_jig_col_name):
+    if used_jig_col_name in df_copy.columns and not df_copy[used_jig_col_name].isnull().all():
+        if 'SNumber' in df_copy.columns and date_col_name in df_copy.columns and not df_copy[date_col_name].dt.date.dropna().empty:
+            for jig, group in df_copy.groupby(used_jig_col_name):
+                # 날짜 열이 datetime 타입인지 확인하고, 아니면 변환
+                if not pd.api.types.is_datetime64_any_dtype(group[date_col_name]):
+                    group.loc[:, date_col_name] = pd.to_datetime(group[date_col_name], errors='coerce')
+                
+                # 유효한 날짜 데이터만 필터링
+                group = group.dropna(subset=[date_col_name]).copy()
+
+                if group.empty:
+                    continue
+
                 for d, day_group in group.groupby(group[date_col_name].dt.date):
-                    if pd.isna(d): 
-                        continue
+                    if pd.isna(d): continue
                     date_iso = pd.to_datetime(d).strftime("%Y-%m-%d")
-                    # SN 단위 PASS 여부 판정                    
+                    
+                    # SNumber가 유효한지 확인하고, 유효한 SNumber만 필터링
+                    day_group = day_group[day_group['SNumber'].notna()]
+                    if day_group.empty:
+                        continue
+
+                    # 'PassStatusNorm'이 존재하는지 확인
+                    if 'PassStatusNorm' not in day_group.columns:
+                        continue
+                    # 각 측정값별 집계 (테스트 횟수 기준)
+                    total_test = len(day_group)  # 전체 테스트 횟수
+                    pass_count = (day_group['PassStatusNorm'] == 'O').sum()  # Pass 테스트 횟수
+                    
+                    # 수정된 집계 로직: 각 테스트별로 집계 (원본 로직과 동일)
+                    # SNumber별로 최종 Pass 여부 결정 (하나라도 O가 있으면 Pass)
+                    # SN별 PASS 여부
                     pass_sns_series = day_group.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
                     pass_sns = pass_sns_series[pass_sns_series].index.tolist()
 
                     
-                    # 구분 집계
-                    false_defect_count = len(day_group[(day_group['PassStatusNorm'] == 'X') & (day_group['SNumber'].isin(pass_sns))]['SNumber'].unique())
-                    true_defect_count = len(day_group[(day_group['PassStatusNorm'] == 'X') & (~day_group['SNumber'].isin(pass_sns))]['SNumber'].unique())
-                    
-                    false_defect_count = len(false_defect_sns)
-                    true_defect_count = len(true_defect_sns)
-                    pass_count = len(pass_sns)
-                    total_test = len(day_group['SNumber'].unique())
-                    fail_count = total_test - pass_count  # SN 기준 Fail 수
+                    # 가성불량: PASS SN인데 X가 나온 경우
+                    false_defect_df = day_group[(day_group['PassStatusNorm'] == 'X') & (day_group['SNumber'].isin(pass_sns))]
+                    false_defect_count = len(false_defect_df)
+                    false_defect_sns = false_defect_df['SNumber'].unique().tolist()
 
+                    # 진성불량: PASS가 한 번도 없고 전부 X인 SN
+                    true_defect_df = day_group[(day_group['PassStatusNorm'] == 'X') & (~day_group['SNumber'].isin(pass_sns))]
+                    true_defect_count = len(true_defect_df)
+                    true_defect_sns = true_defect_df['SNumber'].unique().tolist()
                     
+                    # 전체 실패 횟수
+                    fail_count = false_defect_count + true_defect_count
+                    
+                    # Pass rate 계산
+                    rate = 100 * pass_count / total_test if total_test > 0 else 0
+
                     if jig not in summary_data:
                         summary_data[jig] = {}
                     summary_data[jig][date_iso] = {
@@ -81,8 +120,8 @@ def analyze_data(df, date_col_name, jig_col_name):
                         'false_defect': false_defect_count,
                         'true_defect': true_defect_count,
                         'fail': fail_count,
-                        'false_defect_sns': false_defect_sns,
-                        'true_defect_sns': true_defect_sns
+                        'pass_rate': f"{rate:.1f}%",
+                        'false_defect_sns': false_defect_sns
                     }
     
     all_dates = sorted(list(df_copy[date_col_name].dt.date.dropna().unique()))
