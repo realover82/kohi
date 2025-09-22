@@ -1,34 +1,16 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date
-import sqlite3
-import numpy as np
 import warnings
+import io
+import re
 
 warnings.filterwarnings('ignore')
 
-# SQLite 연결 함수
-@st.cache_resource
-def get_connection():
-    try:
-        db_path = "./db/SJ_TM2360E_v2.sqlite3"
-        conn = sqlite3.connect(db_path, check_same_thread=False)
-        return conn
-    except Exception as e:
-        st.error(f"데이터베이스 연결에 실패했습니다: {e}")
-        return None
+# csv 업로드 및 데이터 처리 유틸리티 함수를 담은 db_utils 모듈 임포트
+from db_utils import process_uploaded_csv
 
-# 데이터베이스에서 테이블을 읽어 DataFrame으로 반환하는 함수
-def read_data_from_db(conn, table_name):
-    try:
-        query = f"SELECT * FROM {table_name}"
-        df = pd.read_sql_query(query, conn)
-        return df
-    except Exception as e:
-        st.error(f"테이블 '{table_name}'에서 데이터를 불러오는 중 오류가 발생했습니다: {e}")
-        return None
-
-# analyze_data 함수
+# analyze_data 함수: CSV 파일에서 읽어온 DataFrame을 분석합니다.
 def analyze_data(df, date_col_name, jig_col_name):
     """
     주어진 DataFrame을 날짜와 지그(Jig) 기준으로 분석합니다.
@@ -45,6 +27,7 @@ def analyze_data(df, date_col_name, jig_col_name):
 
     # PassStatusNorm 컬럼 생성
     df['PassStatusNorm'] = ""
+    # 다양한 Pass 컬럼에 대해 PassStatusNorm 생성
     if 'PcbPass' in df.columns:
         df['PassStatusNorm'] = df['PcbPass'].fillna('').astype(str).str.strip().str.upper()
     elif 'FwPass' in df.columns:
@@ -55,12 +38,16 @@ def analyze_data(df, date_col_name, jig_col_name):
         df['PassStatusNorm'] = df['SemiAssyPass'].fillna('').astype(str).str.strip().str.upper()
     elif 'BatadcPass' in df.columns:
         df['PassStatusNorm'] = df['BatadcPass'].fillna('').astype(str).str.strip().str.upper()
+    else:
+        # Pass 컬럼이 없는 경우, 분석을 계속할 수 없으므로 빈 결과를 반환
+        st.warning("Pass 상태를 나타내는 컬럼이 없습니다. 다음 컬럼 중 하나가 필요합니다: PcbPass, FwPass, RfTxPass, SemiAssyPass, BatadcPass")
+        return {}, [], jig_col_name
 
     summary_data = {}
     
-    # 지그(PC) 컬럼에 데이터가 없는 경우 '전체'를 대체 컬럼으로 사용 (PCB 탭의 경우)
+    # 지그(PC) 컬럼에 데이터가 없는 경우 '전체'를 대체 컬럼으로 사용
     used_jig_col_name = jig_col_name
-    if jig_col_name not in df.columns or df[jig_col_name].isnull().all():
+    if jig_col_name not in df.columns or df[jig_col_name].isnull().all() or df[jig_col_name].nunique() < 2:
         used_jig_col_name = '__total_group__'
         df[used_jig_col_name] = '전체'
 
@@ -68,6 +55,16 @@ def analyze_data(df, date_col_name, jig_col_name):
     if used_jig_col_name in df.columns and not df[used_jig_col_name].isnull().all():
         if 'SNumber' in df.columns and date_col_name in df.columns and not df[date_col_name].dt.date.dropna().empty:
             for jig, group in df.groupby(used_jig_col_name):
+                # 날짜 열이 datetime 타입인지 확인하고, 아니면 변환
+                if not pd.api.types.is_datetime64_any_dtype(group[date_col_name]):
+                    group.loc[:, date_col_name] = pd.to_datetime(group[date_col_name], errors='coerce')
+                
+                # 유효한 날짜 데이터만 필터링
+                group = group.dropna(subset=[date_col_name]).copy()
+
+                if group.empty:
+                    continue
+
                 for d, day_group in group.groupby(group[date_col_name].dt.date):
                     if pd.isna(d): continue
                     date_iso = pd.to_datetime(d).strftime("%Y-%m-%d")
@@ -75,16 +72,17 @@ def analyze_data(df, date_col_name, jig_col_name):
                     pass_sns_series = day_group.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
                     pass_sns = pass_sns_series[pass_sns_series].index.tolist()
 
+                    total_test_count = len(day_group['SNumber'].unique())
+                    pass_count = len(pass_sns)
+                    fail_count = total_test_count - pass_count
+
                     false_defect_count = len(day_group[(day_group['PassStatusNorm'] == 'X') & (day_group['SNumber'].isin(pass_sns))]['SNumber'].unique())
                     true_defect_count = len(day_group[(day_group['PassStatusNorm'] == 'X') & (~day_group['SNumber'].isin(pass_sns))]['SNumber'].unique())
-                    pass_count = len(pass_sns)
-                    total_test = len(day_group['SNumber'].unique())
-                    fail_count = total_test - pass_count
 
                     if jig not in summary_data:
                         summary_data[jig] = {}
                     summary_data[jig][date_iso] = {
-                        'total_test': total_test,
+                        'total_test': total_test_count,
                         'pass': pass_count,
                         'false_defect': false_defect_count,
                         'true_defect': true_defect_count,
@@ -97,8 +95,11 @@ def analyze_data(df, date_col_name, jig_col_name):
 
 
 def display_analysis_result(analysis_key, table_name, date_col_name, selected_jig=None, used_jig_col=None):
+    if st.session_state.analysis_results[analysis_key] is None:
+        st.warning("분석할 파일이 업로드되지 않았습니다.")
+        return
     if st.session_state.analysis_results[analysis_key].empty:
-        st.warning("선택한 날짜에 해당하는 분석 데이터가 없습니다.")
+        st.warning("분석 데이터가 비어 있습니다.")
         return
 
     summary_data, all_dates, used_jig_col_name_from_state = st.session_state.analysis_data[analysis_key]
@@ -159,6 +160,9 @@ def display_analysis_result(analysis_key, table_name, date_col_name, selected_ji
         # 현재 지그에 해당하는 데이터만 필터링
         jig_filtered_df = df_filtered[df_filtered[used_jig_col] == jig].copy()
         
+        # SNumber가 유효한지 확인
+        jig_filtered_df = jig_filtered_df[jig_filtered_df['SNumber'].notna()]
+        
         # PASS 상세 내역
         pass_sns = jig_filtered_df.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
         pass_sns = pass_sns[pass_sns].index.tolist()
@@ -218,10 +222,6 @@ def main():
     st.title("리모컨 생산 데이터 분석 툴")
     st.markdown("---")
 
-    conn = get_connection()
-    if conn is None:
-        return
-
     # 세션 상태 초기화
     if 'analysis_results' not in st.session_state:
         st.session_state.analysis_results = {
@@ -245,6 +245,14 @@ def main():
             'semi': 'SemiAssyMaxBatVolt',
             'func': 'BatadcPC',
         }
+    if 'date_col_mapping' not in st.session_state:
+        st.session_state['date_col_mapping'] = {
+            'pcb': 'PcbStartTime',
+            'fw': 'FwStamp',
+            'rftx': 'RfTxStamp',
+            'semi': 'SemiAssyStartTime',
+            'func': 'BatadcStamp',
+        }
     if 'show_line_chart' not in st.session_state:
         st.session_state.show_line_chart = {}
     if 'show_bar_chart' not in st.session_state:
@@ -265,414 +273,151 @@ def main():
             'semi': {'results': pd.DataFrame(), 'show': False},
             'func': {'results': pd.DataFrame(), 'show': False},
         }
-    
-    try:
-        # 모든 탭에서 공통으로 사용할 원본 데이터를 한 번만 불러옵니다.
-        df_all_data = pd.read_sql_query("SELECT * FROM historyinspection;", conn)
-    except Exception as e:
-        st.error(f"데이터베이스에서 'historyinspection' 테이블을 불러오는 중 오류가 발생했습니다: {e}")
-        return
 
-    # 모든 날짜 관련 컬럼을 datetime 객체로 미리 변환
-    df_all_data['PcbStartTime_dt'] = pd.to_datetime(df_all_data['PcbStartTime'], errors='coerce')
-    df_all_data['FwStamp_dt'] = pd.to_datetime(df_all_data['FwStamp'], errors='coerce')
-    df_all_data['RfTxStamp_dt'] = pd.to_datetime(df_all_data['RfTxStamp'], errors='coerce')
-    df_all_data['SemiAssyStartTime_dt'] = pd.to_datetime(df_all_data['SemiAssyStartTime'], errors='coerce')
-    df_all_data['BatadcStamp_dt'] = pd.to_datetime(df_all_data['BatadcStamp'], errors='coerce')
-    
     # --- 탭별 분석 기능 ---
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["파일 PCB 분석", "파일 Fw 분석", "파일 RfTx 분석", "파일 Semi 분석", "파일 Func 분석"])
     
-    try:
-        with tab1:
-            st.header("파일 PCB (Pcb_Process)")
-            
-            # PC (Jig) 선택 기능 추가
-            pc_col_name = 'PcbMaxIrPwr'
-            unique_pc_pcb = df_all_data[pc_col_name].dropna().unique()
-            pc_options_pcb = ['모든 PC'] + sorted(list(unique_pc_pcb))
-            selected_pc_pcb = st.selectbox("PC (Jig) 선택", pc_options_pcb, key="pc_select_pcb")
+    tabs_config = {
+        'pcb': {
+            'header': "파일 PCB (Pcb_Process)",
+            'date_col': 'PcbStartTime',
+            'jig_col': 'PcbMaxIrPwr',
+            'pass_col': 'PcbPass'
+        },
+        'fw': {
+            'header': "파일 Fw (Fw_Process)",
+            'date_col': 'FwStamp',
+            'jig_col': 'FwPC',
+            'pass_col': 'FwPass'
+        },
+        'rftx': {
+            'header': "파일 RfTx (RfTx_Process)",
+            'date_col': 'RfTxStamp',
+            'jig_col': 'RfTxPC',
+            'pass_col': 'RfTxPass'
+        },
+        'semi': {
+            'header': "파일 Semi (SemiAssy_Process)",
+            'date_col': 'SemiAssyStartTime',
+            'jig_col': 'SemiAssyMaxBatVolt',
+            'pass_col': 'SemiAssyPass'
+        },
+        'func': {
+            'header': "파일 Func (Func_Process)",
+            'date_col': 'BatadcStamp',
+            'jig_col': 'BatadcPC',
+            'pass_col': 'BatadcPass'
+        }
+    }
 
-            df_dates = df_all_data['PcbStartTime_dt'].dt.date.dropna()
-            min_date = df_dates.min() if not df_dates.empty else date.today()
-            max_date = df_dates.max() if not df_dates.dropna().empty else date.today()
-            selected_dates = st.date_input("날짜 범위 선택", value=(min_date, max_date), key="dates_pcb")
+    # 탭 순회 및 UI 렌더링
+    for key, tab_content in zip(['pcb', 'fw', 'rftx', 'semi', 'func'], [tab1, tab2, tab3, tab4, tab5]):
+        with tab_content:
+            st.header(tabs_config[key]['header'])
             
-            if st.button("분석 실행", key="analyze_pcb"):
-                with st.spinner("데이터 분석 및 저장 중..."):
-                    if len(selected_dates) == 2:
-                        start_date, end_date = selected_dates
-                        df_filtered = df_all_data[
-                            (df_all_data['PcbStartTime_dt'].dt.date >= start_date) &
-                            (df_all_data['PcbStartTime_dt'].dt.date <= end_date)
-                        ].copy()
-                        if selected_pc_pcb != '모든 PC':
-                            df_filtered = df_filtered[df_filtered[pc_col_name] == selected_pc_pcb].copy()
-                    else:
-                        st.warning("날짜 범위를 올바르게 선택해주세요.")
-                        df_filtered = pd.DataFrame()
-                    
-                    st.session_state.analysis_results['pcb'] = df_filtered
-                    st.session_state.analysis_data['pcb'] = analyze_data(df_filtered, 'PcbStartTime_dt', pc_col_name)
-                    st.session_state.analysis_time['pcb'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    st.session_state['last_analyzed_key'] = 'pcb'
-                st.success("분석 완료! 결과가 저장되었습니다.")
+            uploaded_file = st.file_uploader("CSV 파일 업로드", type=["csv"], key=f"uploader_{key}")
+            
+            if uploaded_file:
+                df_all_data = process_uploaded_csv(uploaded_file, key)
+                
+                if df_all_data is not None and not df_all_data.empty:
+                    st.success("파일이 성공적으로 로드되었습니다.")
+                    st.session_state.analysis_results[key] = df_all_data.copy()
+                else:
+                    st.warning("유효한 데이터를 불러오지 못했습니다. 올바른 형식의 파일인지 확인해주세요.")
+                    st.session_state.analysis_results[key] = None
+            
+            if st.session_state.analysis_results[key] is not None:
+                df_to_analyze = st.session_state.analysis_results[key].copy()
+                
+                # PC (Jig) 선택 기능 추가
+                jig_col_name = tabs_config[key]['jig_col']
+                date_col_name = tabs_config[key]['date_col']
+                
+                # 날짜 컬럼을 datetime으로 변환 (파일 로드 시 처리될 수 있으나 안전을 위해 다시 확인)
+                df_to_analyze[f"{date_col_name}_dt"] = pd.to_datetime(df_to_analyze[date_col_name], errors='coerce')
+                
+                unique_pc = df_to_analyze[jig_col_name].dropna().unique()
+                pc_options = ['모든 PC'] + sorted(list(unique_pc))
+                selected_pc = st.selectbox("PC (Jig) 선택", pc_options, key=f"pc_select_{key}")
 
-            # 분석 결과가 존재하면 항상 표시
-            if st.session_state.analysis_results['pcb'] is not None:
-                display_analysis_result('pcb', 'Pcb_Process', 'PcbStartTime_dt',
-                                        selected_jig=selected_pc_pcb if selected_pc_pcb != '모든 PC' else None)
-            
-            st.markdown("---")
-            st.markdown("#### PCB 데이터 조회")
-            snumber_query_pcb = st.text_input("SNumber를 입력하세요 (PCB)", key="snumber_search_bar_pcb")
-            
-            col_search_btn, col_view_btn = st.columns(2)
-            with col_search_btn:
-                if st.button("SNumber 검색 실행", key="snumber_search_btn_pcb"):
-                    st.session_state.snumber_search['pcb']['show'] = True
-                    if snumber_query_pcb:
-                        with st.spinner("데이터베이스에서 SNumber 검색 중..."):
-                            filtered_df = st.session_state.analysis_results['pcb'][
-                                st.session_state.analysis_results['pcb']['SNumber'].fillna('').astype(str).str.contains(snumber_query_pcb, case=False, na=False)
-                            ]
-                        if not filtered_df.empty:
-                            st.success(f"'{snumber_query_pcb}'에 대한 {len(filtered_df)}건의 검색 결과를 찾았습니다.")
-                            st.session_state.snumber_search['pcb']['results'] = filtered_df
+                df_dates = df_to_analyze[f"{date_col_name}_dt"].dt.date.dropna()
+                min_date = df_dates.min() if not df_dates.empty else date.today()
+                max_date = df_dates.max() if not df_dates.dropna().empty else date.today()
+                selected_dates = st.date_input("날짜 범위 선택", value=(min_date, max_date), key=f"dates_{key}")
+                
+                if st.button("분석 실행", key=f"analyze_{key}"):
+                    with st.spinner("데이터 분석 및 저장 중..."):
+                        if len(selected_dates) == 2:
+                            start_date, end_date = selected_dates
+                            df_filtered = df_to_analyze[
+                                (df_to_analyze[f"{date_col_name}_dt"].dt.date >= start_date) &
+                                (df_to_analyze[f"{date_col_name}_dt"].dt.date <= end_date)
+                            ].copy()
+                            
+                            if selected_pc != '모든 PC':
+                                df_filtered = df_filtered[df_filtered[jig_col_name] == selected_pc].copy()
                         else:
-                            st.warning(f"'{snumber_query_pcb}'에 대한 검색 결과가 없습니다.")
-                            st.session_state.snumber_search['pcb']['results'] = pd.DataFrame()
+                            st.warning("날짜 범위를 올바르게 선택해주세요.")
+                            df_filtered = pd.DataFrame()
+                        
+                        st.session_state.analysis_results[key] = df_filtered
+                        st.session_state.analysis_data[key] = analyze_data(df_filtered, f"{date_col_name}_dt", jig_col_name)
+                        st.session_state.analysis_time[key] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        st.session_state['last_analyzed_key'] = key
+                    st.success("분석 완료! 결과가 저장되었습니다.")
+
+                # 분석 결과가 존재하면 항상 표시
+                if st.session_state.analysis_results[key] is not None:
+                    if st.session_state.analysis_results[key].empty:
+                        st.warning("선택한 조건에 맞는 데이터가 없습니다.")
                     else:
-                        st.warning("SNumber를 입력해주세요.")
-                        st.session_state.snumber_search['pcb']['results'] = pd.DataFrame()
-
-            with col_view_btn:
-                if st.button("원본 DB 조회", key="view_last_db_pcb"):
-                    st.session_state.original_db_view['pcb']['show'] = True
-                    if st.session_state.analysis_results['pcb'] is not None:
-                        st.success(f"PCB 탭의 원본 데이터를 조회합니다.")
-                        st.session_state.original_db_view['pcb']['results'] = st.session_state.analysis_results['pcb'].copy()
-                    else:
-                        st.warning("먼저 PCB 탭에서 '분석 실행' 버튼을 눌러 데이터를 분석해주세요.")
-                        st.session_state.original_db_view['pcb']['results'] = pd.DataFrame()
-
-            if st.session_state.snumber_search['pcb']['show'] and not st.session_state.snumber_search['pcb']['results'].empty:
-                st.dataframe(st.session_state.snumber_search['pcb']['results'].reset_index(drop=True))
-
-            if st.session_state.original_db_view['pcb']['show'] and not st.session_state.original_db_view['pcb']['results'].empty:
-                st.dataframe(st.session_state.original_db_view['pcb']['results'].reset_index(drop=True))
-
-
-        with tab2:
-            st.header("파일 Fw (Fw_Process)")
-
-            pc_col_name = 'FwPC'
-            unique_pc_fw = df_all_data[pc_col_name].dropna().unique()
-            pc_options_fw = ['모든 PC'] + sorted(list(unique_pc_fw))
-            selected_pc_fw = st.selectbox("PC (Jig) 선택", pc_options_fw, key="pc_select_fw")
-
-            df_dates = df_all_data['FwStamp_dt'].dt.date.dropna()
-            min_date = df_dates.min() if not df_dates.empty else date.today()
-            max_date = df_dates.max() if not df_dates.dropna().empty else date.today()
-            selected_dates = st.date_input("날짜 범위 선택", value=(min_date, max_date), key="dates_fw")
-            
-            if st.button("분석 실행", key="analyze_fw"):
-                with st.spinner("데이터 분석 및 저장 중..."):
-                    if len(selected_dates) == 2:
-                        start_date, end_date = selected_dates
-                        df_filtered = df_all_data[
-                            (df_all_data['FwStamp_dt'].dt.date >= start_date) &
-                            (df_all_data['FwStamp_dt'].dt.date <= end_date)
-                        ].copy()
-                        if selected_pc_fw != '모든 PC':
-                            df_filtered = df_filtered[df_filtered[pc_col_name] == selected_pc_fw].copy()
-                    else:
-                        st.warning("날짜 범위를 올바르게 선택해주세요.")
-                        df_filtered = pd.DataFrame()
-
-                    st.session_state.analysis_results['fw'] = df_filtered
-                    st.session_state.analysis_data['fw'] = analyze_data(df_filtered, 'FwStamp_dt', pc_col_name)
-                    st.session_state.analysis_time['fw'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    st.session_state['last_analyzed_key'] = 'fw'
-                st.success("분석 완료! 결과가 저장되었습니다.")
-
-            # 분석 결과가 존재하면 항상 표시
-            if st.session_state.analysis_results['fw'] is not None:
-                display_analysis_result('fw', 'Fw_Process', 'FwStamp_dt',
-                                        selected_jig=selected_pc_fw if selected_pc_fw != '모든 PC' else None)
-
-            st.markdown("---")
-            st.markdown("#### Fw 데이터 조회")
-            snumber_query_fw = st.text_input("SNumber를 입력하세요 (Fw)", key="snumber_search_bar_fw")
-            
-            col_search_btn, col_view_btn = st.columns(2)
-            with col_search_btn:
-                if st.button("SNumber 검색 실행", key="snumber_search_btn_fw"):
-                    st.session_state.snumber_search['fw']['show'] = True
-                    if snumber_query_fw:
-                        with st.spinner("데이터베이스에서 SNumber 검색 중..."):
-                            filtered_df = st.session_state.analysis_results['fw'][
-                                st.session_state.analysis_results['fw']['SNumber'].fillna('').astype(str).str.contains(snumber_query_fw, case=False, na=False)
-                            ]
-                        if not filtered_df.empty:
-                            st.success(f"'{snumber_query_fw}'에 대한 {len(filtered_df)}건의 검색 결과를 찾았습니다.")
-                            st.session_state.snumber_search['fw']['results'] = filtered_df
+                        display_analysis_result(key, tabs_config[key]['header'], f"{date_col_name}_dt",
+                                                selected_jig=selected_pc if selected_pc != '모든 PC' else None)
+                
+                st.markdown("---")
+                st.markdown(f"#### {tabs_config[key]['header'].split()[1]} 데이터 조회")
+                snumber_query = st.text_input("SNumber를 입력하세요", key=f"snumber_search_bar_{key}")
+                
+                col_search_btn, col_view_btn = st.columns(2)
+                with col_search_btn:
+                    if st.button("SNumber 검색 실행", key=f"snumber_search_btn_{key}"):
+                        st.session_state.snumber_search[key]['show'] = True
+                        if snumber_query:
+                            with st.spinner("데이터에서 SNumber 검색 중..."):
+                                df_source = st.session_state.analysis_results.get(key)
+                                if df_source is not None and not df_source.empty:
+                                    filtered_df = df_source[
+                                        df_source['SNumber'].fillna('').astype(str).str.contains(snumber_query, case=False, na=False)
+                                    ]
+                                    if not filtered_df.empty:
+                                        st.success(f"'{snumber_query}'에 대한 {len(filtered_df)}건의 검색 결과를 찾았습니다.")
+                                        st.session_state.snumber_search[key]['results'] = filtered_df.copy()
+                                    else:
+                                        st.warning(f"'{snumber_query}'에 대한 검색 결과가 없습니다.")
+                                        st.session_state.snumber_search[key]['results'] = pd.DataFrame()
+                                else:
+                                    st.warning("먼저 CSV 파일을 업로드하고 분석을 실행해주세요.")
+                                    st.session_state.snumber_search[key]['results'] = pd.DataFrame()
                         else:
-                            st.warning(f"'{snumber_query_fw}'에 대한 검색 결과가 없습니다.")
-                            st.session_state.snumber_search['fw']['results'] = pd.DataFrame()
-                    else:
-                        st.warning("SNumber를 입력해주세요.")
-                        st.session_state.snumber_search['fw']['results'] = pd.DataFrame()
+                            st.warning("SNumber를 입력해주세요.")
+                            st.session_state.snumber_search[key]['results'] = pd.DataFrame()
 
-            with col_view_btn:
-                if st.button("원본 DB 조회", key="view_last_db_fw"):
-                    st.session_state.original_db_view['fw']['show'] = True
-                    if st.session_state.analysis_results['fw'] is not None:
-                        st.success(f"Fw 탭의 원본 데이터를 조회합니다.")
-                        st.session_state.original_db_view['fw']['results'] = st.session_state.analysis_results['fw'].copy()
-                    else:
-                        st.warning("먼저 Fw 탭에서 '분석 실행' 버튼을 눌러 데이터를 분석해주세요.")
-                        st.session_state.original_db_view['fw']['results'] = pd.DataFrame()
-
-            if st.session_state.snumber_search['fw']['show'] and not st.session_state.snumber_search['fw']['results'].empty:
-                st.dataframe(st.session_state.snumber_search['fw']['results'].reset_index(drop=True))
-
-            if st.session_state.original_db_view['fw']['show'] and not st.session_state.original_db_view['fw']['results'].empty:
-                st.dataframe(st.session_state.original_db_view['fw']['results'].reset_index(drop=True))
-
-        with tab3:
-            st.header("파일 RfTx (RfTx_Process)")
-
-            pc_col_name = 'RfTxPC'
-            unique_pc_rftx = df_all_data[pc_col_name].dropna().unique()
-            pc_options_rftx = ['모든 PC'] + sorted(list(unique_pc_rftx))
-            selected_pc_rftx = st.selectbox("PC (Jig) 선택", pc_options_rftx, key="pc_select_rftx")
-
-            df_dates = df_all_data['RfTxStamp_dt'].dt.date.dropna()
-            min_date = df_dates.min() if not df_dates.empty else date.today()
-            max_date = df_dates.max() if not df_dates.dropna().empty else date.today()
-            selected_dates = st.date_input("날짜 범위 선택", value=(min_date, max_date), key="dates_rftx")
-            
-            if st.button("분석 실행", key="analyze_rftx"):
-                with st.spinner("데이터 분석 및 저장 중..."):
-                    if len(selected_dates) == 2:
-                        start_date, end_date = selected_dates
-                        df_filtered = df_all_data[
-                            (df_all_data['RfTxStamp_dt'].dt.date >= start_date) &
-                            (df_all_data['RfTxStamp_dt'].dt.date <= end_date)
-                        ].copy()
-                        if selected_pc_rftx != '모든 PC':
-                            df_filtered = df_filtered[df_filtered[pc_col_name] == selected_pc_rftx].copy()
-                    else:
-                        st.warning("날짜 범위를 올바르게 선택해주세요.")
-                        df_filtered = pd.DataFrame()
-
-                    st.session_state.analysis_results['rftx'] = df_filtered
-                    st.session_state.analysis_data['rftx'] = analyze_data(df_filtered, 'RfTxStamp_dt', pc_col_name)
-                    st.session_state.analysis_time['rftx'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    st.session_state['last_analyzed_key'] = 'rftx'
-                st.success("분석 완료! 결과가 저장되었습니다.")
-
-            # 분석 결과가 존재하면 항상 표시
-            if st.session_state.analysis_results['rftx'] is not None:
-                display_analysis_result('rftx', 'RfTx_Process', 'RfTxStamp_dt',
-                                        selected_jig=selected_pc_rftx if selected_pc_rftx != '모든 PC' else None)
-
-            st.markdown("---")
-            st.markdown("#### RfTx 데이터 조회")
-            snumber_query_rftx = st.text_input("SNumber를 입력하세요 (RfTx)", key="snumber_search_bar_rftx")
-            
-            col_search_btn, col_view_btn = st.columns(2)
-            with col_search_btn:
-                if st.button("SNumber 검색 실행", key="snumber_search_btn_rftx"):
-                    st.session_state.snumber_search['rftx']['show'] = True
-                    if snumber_query_rftx:
-                        with st.spinner("데이터베이스에서 SNumber 검색 중..."):
-                            filtered_df = st.session_state.analysis_results['rftx'][
-                                st.session_state.analysis_results['rftx']['SNumber'].fillna('').astype(str).str.contains(snumber_query_rftx, case=False, na=False)
-                            ]
-                        if not filtered_df.empty:
-                            st.success(f"'{snumber_query_rftx}'에 대한 {len(filtered_df)}건의 검색 결과를 찾았습니다.")
-                            st.session_state.snumber_search['rftx']['results'] = filtered_df
+                with col_view_btn:
+                    if st.button("업로드된 파일 원본 조회", key=f"view_last_db_{key}"):
+                        st.session_state.original_db_view[key]['show'] = True
+                        if st.session_state.analysis_results[key] is not None:
+                            st.success(f"{tabs_config[key]['header'].split()[1]} 탭의 원본 데이터를 조회합니다.")
+                            st.session_state.original_db_view[key]['results'] = st.session_state.analysis_results[key].copy()
                         else:
-                            st.warning(f"'{snumber_query_rftx}'에 대한 검색 결과가 없습니다.")
-                            st.session_state.snumber_search['rftx']['results'] = pd.DataFrame()
-                    else:
-                        st.warning("SNumber를 입력해주세요.")
-                        st.session_state.snumber_search['rftx']['results'] = pd.DataFrame()
+                            st.warning("먼저 '분석 실행' 버튼을 눌러 데이터를 분석해주세요.")
+                            st.session_state.original_db_view[key]['results'] = pd.DataFrame()
 
-            with col_view_btn:
-                if st.button("원본 DB 조회", key="view_last_db_rftx"):
-                    st.session_state.original_db_view['rftx']['show'] = True
-                    if st.session_state.analysis_results['rftx'] is not None:
-                        st.success(f"RfTx 탭의 원본 데이터를 조회합니다.")
-                        st.session_state.original_db_view['rftx']['results'] = st.session_state.analysis_results['rftx'].copy()
-                    else:
-                        st.warning("먼저 RfTx 탭에서 '분석 실행' 버튼을 눌러 데이터를 분석해주세요.")
-                        st.session_state.original_db_view['rftx']['results'] = pd.DataFrame()
+                if st.session_state.snumber_search[key]['show'] and not st.session_state.snumber_search[key]['results'].empty:
+                    st.dataframe(st.session_state.snumber_search[key]['results'].reset_index(drop=True))
 
-            if st.session_state.snumber_search['rftx']['show'] and not st.session_state.snumber_search['rftx']['results'].empty:
-                st.dataframe(st.session_state.snumber_search['rftx']['results'].reset_index(drop=True))
-
-            if st.session_state.original_db_view['rftx']['show'] and not st.session_state.original_db_view['rftx']['results'].empty:
-                st.dataframe(st.session_state.original_db_view['rftx']['results'].reset_index(drop=True))
-
-        with tab4:
-            st.header("파일 Semi (SemiAssy_Process)")
-
-            pc_col_name = 'SemiAssyMaxBatVolt'
-            unique_pc_semi = df_all_data[pc_col_name].dropna().unique()
-            pc_options_semi = ['모든 PC'] + sorted(list(unique_pc_semi))
-            selected_pc_semi = st.selectbox("PC (Jig) 선택", pc_options_semi, key="pc_select_semi")
-
-            df_dates = df_all_data['SemiAssyStartTime_dt'].dt.date.dropna()
-            min_date = df_dates.min() if not df_dates.empty else date.today()
-            max_date = df_dates.max() if not df_dates.dropna().empty else date.today()
-            selected_dates = st.date_input("날짜 범위 선택", value=(min_date, max_date), key="dates_semi")
-            
-            if st.button("분석 실행", key="analyze_semi"):
-                with st.spinner("데이터 분석 및 저장 중..."):
-                    if len(selected_dates) == 2:
-                        start_date, end_date = selected_dates
-                        df_filtered = df_all_data[
-                            (df_all_data['SemiAssyStartTime_dt'].dt.date >= start_date) &
-                            (df_all_data['SemiAssyStartTime_dt'].dt.date <= end_date)
-                        ].copy()
-                        if selected_pc_semi != '모든 PC':
-                            df_filtered = df_filtered[df_filtered[pc_col_name] == selected_pc_semi].copy()
-                    else:
-                        st.warning("날짜 범위를 올바르게 선택해주세요.")
-                        df_filtered = pd.DataFrame()
-
-                    st.session_state.analysis_results['semi'] = df_filtered
-                    st.session_state.analysis_data['semi'] = analyze_data(df_filtered, 'SemiAssyStartTime_dt', pc_col_name)
-                    st.session_state.analysis_time['semi'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    st.session_state['last_analyzed_key'] = 'semi'
-                st.success("분석 완료! 결과가 저장되었습니다.")
-
-            # 분석 결과가 존재하면 항상 표시
-            if st.session_state.analysis_results['semi'] is not None:
-                display_analysis_result('semi', 'SemiAssy_Process', 'SemiAssyStartTime_dt',
-                                        selected_jig=selected_pc_semi if selected_pc_semi != '모든 PC' else None)
-
-            st.markdown("---")
-            st.markdown("#### Semi 데이터 조회")
-            snumber_query_semi = st.text_input("SNumber를 입력하세요 (Semi)", key="snumber_search_bar_semi")
-            
-            col_search_btn, col_view_btn = st.columns(2)
-            with col_search_btn:
-                if st.button("SNumber 검색 실행", key="snumber_search_btn_semi"):
-                    st.session_state.snumber_search['semi']['show'] = True
-                    if snumber_query_semi:
-                        with st.spinner("데이터베이스에서 SNumber 검색 중..."):
-                            filtered_df = st.session_state.analysis_results['semi'][
-                                st.session_state.analysis_results['semi']['SNumber'].fillna('').astype(str).str.contains(snumber_query_semi, case=False, na=False)
-                            ]
-                        if not filtered_df.empty:
-                            st.success(f"'{snumber_query_semi}'에 대한 {len(filtered_df)}건의 검색 결과를 찾았습니다.")
-                            st.session_state.snumber_search['semi']['results'] = filtered_df
-                        else:
-                            st.warning(f"'{snumber_query_semi}'에 대한 검색 결과가 없습니다.")
-                            st.session_state.snumber_search['semi']['results'] = pd.DataFrame()
-                    else:
-                        st.warning("SNumber를 입력해주세요.")
-                        st.session_state.snumber_search['semi']['results'] = pd.DataFrame()
-
-            with col_view_btn:
-                if st.button("원본 DB 조회", key="view_last_db_semi"):
-                    st.session_state.original_db_view['semi']['show'] = True
-                    if st.session_state.analysis_results['semi'] is not None:
-                        st.success(f"Semi 탭의 원본 데이터를 조회합니다.")
-                        st.session_state.original_db_view['semi']['results'] = st.session_state.analysis_results['semi'].copy()
-                    else:
-                        st.warning("먼저 Semi 탭에서 '분석 실행' 버튼을 눌러 데이터를 분석해주세요.")
-                        st.session_state.original_db_view['semi']['results'] = pd.DataFrame()
-
-            if st.session_state.snumber_search['semi']['show'] and not st.session_state.snumber_search['semi']['results'].empty:
-                st.dataframe(st.session_state.snumber_search['semi']['results'].reset_index(drop=True))
-
-            if st.session_state.original_db_view['semi']['show'] and not st.session_state.original_db_view['semi']['results'].empty:
-                st.dataframe(st.session_state.original_db_view['semi']['results'].reset_index(drop=True))
-
-        with tab5:
-            st.header("파일 Func (Func_Process)")
-
-            pc_col_name = 'BatadcPC'
-            unique_pc_func = df_all_data[pc_col_name].dropna().unique()
-            pc_options_func = ['모든 PC'] + sorted(list(unique_pc_func))
-            selected_pc_func = st.selectbox("PC (Jig) 선택", pc_options_func, key="pc_select_func")
-            
-            df_dates = df_all_data['BatadcStamp_dt'].dt.date.dropna()
-            min_date = df_dates.min() if not df_dates.empty else date.today()
-            max_date = df_dates.max() if not df_dates.dropna().empty else date.today()
-            selected_dates = st.date_input("날짜 범위 선택", value=(min_date, max_date), key="dates_func")
-            
-            if st.button("분석 실행", key="analyze_func"):
-                with st.spinner("데이터 분석 및 저장 중..."):
-                    if len(selected_dates) == 2:
-                        start_date, end_date = selected_dates
-                        df_filtered = df_all_data[
-                            (df_all_data['BatadcStamp_dt'].dt.date >= start_date) &
-                            (df_all_data['BatadcStamp_dt'].dt.date <= end_date)
-                        ].copy()
-                        if selected_pc_func != '모든 PC':
-                            df_filtered = df_filtered[df_filtered[pc_col_name] == selected_pc_func].copy()
-                    else:
-                        st.warning("날짜 범위를 올바르게 선택해주세요.")
-                        df_filtered = pd.DataFrame()
-                    
-                    st.session_state.analysis_results['func'] = df_filtered
-                    st.session_state.analysis_data['func'] = analyze_data(df_filtered, 'BatadcStamp_dt', pc_col_name)
-                    st.session_state.analysis_time['func'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    st.session_state['last_analyzed_key'] = 'func'
-                st.success("분석 완료! 결과가 저장되었습니다.")
-
-            # 분석 결과가 존재하면 항상 표시
-            if st.session_state.analysis_results['func'] is not None:
-                display_analysis_result('func', 'Func_Process', 'BatadcStamp_dt',
-                                        selected_jig=selected_pc_func if selected_pc_func != '모든 PC' else None)
-            
-            st.markdown("---")
-            st.markdown("#### Func 데이터 조회")
-            snumber_query_func = st.text_input("SNumber를 입력하세요 (Func)", key="snumber_search_bar_func")
-            
-            col_search_btn, col_view_btn = st.columns(2)
-            with col_search_btn:
-                if st.button("SNumber 검색 실행", key="snumber_search_btn_func"):
-                    st.session_state.snumber_search['func']['show'] = True
-                    if snumber_query_func:
-                        with st.spinner("데이터베이스에서 SNumber 검색 중..."):
-                            filtered_df = st.session_state.analysis_results['func'][
-                                st.session_state.analysis_results['func']['SNumber'].fillna('').astype(str).str.contains(snumber_query_func, case=False, na=False)
-                            ]
-                        if not filtered_df.empty:
-                            st.success(f"'{snumber_query_func}'에 대한 {len(filtered_df)}건의 검색 결과를 찾았습니다.")
-                            st.session_state.snumber_search['func']['results'] = filtered_df
-                        else:
-                            st.warning(f"'{snumber_query_func}'에 대한 검색 결과가 없습니다.")
-                            st.session_state.snumber_search['func']['results'] = pd.DataFrame()
-                    else:
-                        st.warning("SNumber를 입력해주세요.")
-                        st.session_state.snumber_search['func']['results'] = pd.DataFrame()
-
-            with col_view_btn:
-                if st.button("원본 DB 조회", key="view_last_db_func"):
-                    st.session_state.original_db_view['func']['show'] = True
-                    if st.session_state.analysis_results['func'] is not None:
-                        st.success(f"Func 탭의 원본 데이터를 조회합니다.")
-                        st.session_state.original_db_view['func']['results'] = st.session_state.analysis_results['func'].copy()
-                    else:
-                        st.warning("먼저 Func 탭에서 '분석 실행' 버튼을 눌러 데이터를 분석해주세요.")
-                        st.session_state.original_db_view['func']['results'] = pd.DataFrame()
-            
-            if st.session_state.snumber_search['func']['show'] and not st.session_state.snumber_search['func']['results'].empty:
-                st.dataframe(st.session_state.snumber_search['func']['results'].reset_index(drop=True))
-            
-            if st.session_state.original_db_view['func']['show'] and not st.session_state.original_db_view['func']['results'].empty:
-                st.dataframe(st.session_state.original_db_view['func']['results'].reset_index(drop=True))
-    
-    except Exception as e:
-        st.error(f"데이터를 불러오는 중 오류가 발생했습니다: {e}")
+                if st.session_state.original_db_view[key]['show'] and not st.session_state.original_db_view[key]['results'].empty:
+                    st.dataframe(st.session_state.original_db_view[key]['results'].reset_index(drop=True))
 
 if __name__ == "__main__":
     main()
