@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
+import altair as alt
 
 # 각 CSV 분석 모듈 불러오기
 from csv2 import read_csv_with_dynamic_header, analyze_data
@@ -8,7 +9,6 @@ from csv_Fw import read_csv_with_dynamic_header_for_Fw, analyze_Fw_data
 from csv_RfTx import read_csv_with_dynamic_header_for_RfTx, analyze_RfTx_data
 from csv_Semi import read_csv_with_dynamic_header_for_Semi, analyze_Semi_data
 from csv_Batadc import read_csv_with_dynamic_header_for_Batadc, analyze_Batadc_data
-import altair as alt
 
 def display_analysis_result(analysis_key, file_name, jig_col_name):
     """ session_state에 저장된 분석 결과를 Streamlit에 표시하는 함수 """
@@ -54,38 +54,53 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
     # --- 데이터 집계 ---
     jigs_to_display = jig_list if selected_jig == "전체" else [selected_jig]
     
-    report_data = {'지표': ['총 테스트 수', 'PASS', '가성불량', '진성불량', 'FAIL']}
-    daily_chart_data = []
-
-    for date_obj in filtered_dates:
+    daily_aggregated_data = {}
+    for date_obj in all_dates: # 전체 날짜에 대해 집계 데이터 미리 계산
         daily_totals = {key: 0 for key in ['total_test', 'pass', 'false_defect', 'true_defect', 'fail']}
         for jig in jigs_to_display:
             data_point = summary_data.get(jig, {}).get(date_obj.strftime('%Y-%m-%d'))
             if data_point:
                 for key in daily_totals:
                     daily_totals[key] += data_point.get(key, 0)
-        
-        date_str_col = date_obj.strftime('%y%m%d')
-        report_data[date_str_col] = [
-            daily_totals['total_test'], daily_totals['pass'], daily_totals['false_defect'],
-            daily_totals['true_defect'], daily_totals['fail']
-        ]
-        
-        daily_chart_data.append({
-            'date': date_obj,
-            'PASS': daily_totals['pass'],
-            '가성불량': daily_totals['false_defect'],
-            '진성불량': daily_totals['true_defect'],
-            'FAIL': daily_totals['fail']
-        })
+        daily_aggregated_data[date_obj] = daily_totals
+
+    # --- 최종일 데이터 요약 (KPI 카드) ---
+    st.subheader(f"요약: {end_date.strftime('%Y-%m-%d')}")
+    
+    last_day_data = daily_aggregated_data.get(end_date)
+    prev_date = end_date - timedelta(days=1)
+    prev_day_data = daily_aggregated_data.get(prev_date)
+
+    delta_false, delta_true = None, None
+    if last_day_data and prev_day_data:
+        delta_false = last_day_data['false_defect'] - prev_day_data['false_defect']
+        delta_true = last_day_data['true_defect'] - prev_day_data['true_defect']
+
+    kpi_cols = st.columns(5)
+    if last_day_data:
+        kpi_cols[0].metric("총 테스트 수", f"{last_day_data['total_test']:,}")
+        kpi_cols[1].metric("PASS", f"{last_day_data['pass']:,}")
+        kpi_cols[2].metric("FAIL", f"{last_day_data['fail']:,}")
+        kpi_cols[3].metric("가성불량", f"{last_day_data['false_defect']:,}", delta=f"{delta_false}" if delta_false is not None else None)
+        kpi_cols[4].metric("진성불량", f"{last_day_data['true_defect']:,}", delta=f"{delta_true}" if delta_true is not None else None)
+    st.markdown("---")
+
 
     # --- 일별 요약 테이블 ---
     st.subheader("일별 요약 테이블")
+    report_data = {'지표': ['총 테스트 수', 'PASS', '가성불량', '진성불량', 'FAIL']}
+    for date_obj in filtered_dates:
+        daily_totals = daily_aggregated_data.get(date_obj, {})
+        date_str_col = date_obj.strftime('%y%m%d')
+        report_data[date_str_col] = [
+            daily_totals.get('total_test', 0), daily_totals.get('pass', 0), daily_totals.get('false_defect', 0),
+            daily_totals.get('true_defect', 0), daily_totals.get('fail', 0)
+        ]
     report_df = pd.DataFrame(report_data).set_index('지표')
     st.dataframe(report_df)
 
     # --- 일별 추이 그래프 ---
-    st.subheader("일별 추이 그래프")
+    st.subheader("일자별 불량 추이")
     chart_mode_key = f'chart_mode_{analysis_key}'
     if chart_mode_key not in st.session_state:
         st.session_state[chart_mode_key] = 'bar'
@@ -98,16 +113,21 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
         if st.button("막대 그래프", key=f"bar_chart_btn_{analysis_key}"):
             st.session_state[chart_mode_key] = 'bar'
     
-    if daily_chart_data:
-        chart_df = pd.DataFrame(daily_chart_data)
-        chart_df_melted = chart_df.melt('date', var_name='지표', value_name='수량')
+    chart_data_list = [
+        {'date': date, '가성불량': data['false_defect'], '진성불량': data['true_defect'], 'FAIL': data['fail']}
+        for date, data in daily_aggregated_data.items() if start_date <= date <= end_date
+    ]
+
+    if chart_data_list:
+        chart_df = pd.DataFrame(chart_data_list)
+        chart_df_melted = chart_df.melt('date', var_name='불량 유형', value_name='수량')
 
         common_chart = alt.Chart(chart_df_melted).encode(
-            x=alt.X('date:T', axis=alt.Axis(title='날짜'),#, format='%Y-%m-%d')),
-            y=alt.Y('수량:Q', axis=alt.Axis(title='수량')),
-            color='지표:N',
-            tooltip=['date:T', '지표', '수량']
-        ).interactive()
+            x=alt.X('date:T', axis=alt.Axis(title='날짜')),#, format='%Y-%m-%d')),
+            y=alt.Y('수량:Q', axis=alt.Axis(title='불량 건수')),
+            color=alt.Color('불량 유형', legend=alt.Legend(title="불량 유형")),
+            tooltip=['date:T', '불량 유형', '수량']
+        ).properties(title='일자별 불량 건수 추이').interactive()
 
         if st.session_state[chart_mode_key] == 'line':
             st.altair_chart(common_chart.mark_line(point=True), use_container_width=True)

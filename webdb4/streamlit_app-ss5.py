@@ -123,7 +123,7 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
         chart_df_melted = chart_df.melt('date', var_name='불량 유형', value_name='수량')
 
         common_chart = alt.Chart(chart_df_melted).encode(
-            x=alt.X('date:T', axis=alt.Axis(title='날짜', format='%Y-%m-%d')),
+            x=alt.X('date:T', axis=alt.Axis(title='날짜')),#, format='%Y-%m-%d')),
             y=alt.Y('수량:Q', axis=alt.Axis(title='불량 건수')),
             color=alt.Color('불량 유형', legend=alt.Legend(title="불량 유형")),
             tooltip=['date:T', '불량 유형', '수량']
