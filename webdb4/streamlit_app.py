@@ -26,18 +26,19 @@ def analyze_data(df, date_col_name, jig_col_name):
         return {}, [], jig_col_name
 
     # PassStatusNorm 컬럼 생성
-    df['PassStatusNorm'] = ""
+    df_copy = df.copy()
+    df_copy['PassStatusNorm'] = ""
     # 다양한 Pass 컬럼에 대해 PassStatusNorm 생성
-    if 'PcbPass' in df.columns:
-        df['PassStatusNorm'] = df['PcbPass'].fillna('').astype(str).str.strip().str.upper()
-    elif 'FwPass' in df.columns:
-        df['PassStatusNorm'] = df['FwPass'].fillna('').astype(str).str.strip().str.upper()
-    elif 'RfTxPass' in df.columns:
-        df['PassStatusNorm'] = df['RfTxPass'].fillna('').astype(str).str.strip().str.upper()
-    elif 'SemiAssyPass' in df.columns:
-        df['PassStatusNorm'] = df['SemiAssyPass'].fillna('').astype(str).str.strip().str.upper()
-    elif 'BatadcPass' in df.columns:
-        df['PassStatusNorm'] = df['BatadcPass'].fillna('').astype(str).str.strip().str.upper()
+    if 'PcbPass' in df_copy.columns:
+        df_copy['PassStatusNorm'] = df_copy['PcbPass'].fillna('').astype(str).str.strip().str.upper()
+    elif 'FwPass' in df_copy.columns:
+        df_copy['PassStatusNorm'] = df_copy['FwPass'].fillna('').astype(str).str.strip().str.upper()
+    elif 'RfTxPass' in df_copy.columns:
+        df_copy['PassStatusNorm'] = df_copy['RfTxPass'].fillna('').astype(str).str.strip().str.upper()
+    elif 'SemiAssyPass' in df_copy.columns:
+        df_copy['PassStatusNorm'] = df_copy['SemiAssyPass'].fillna('').astype(str).str.strip().str.upper()
+    elif 'BatadcPass' in df_copy.columns:
+        df_copy['PassStatusNorm'] = df_copy['BatadcPass'].fillna('').astype(str).str.strip().str.upper()
     else:
         # Pass 컬럼이 없는 경우, 분석을 계속할 수 없으므로 빈 결과를 반환
         st.warning("Pass 상태를 나타내는 컬럼이 없습니다. 다음 컬럼 중 하나가 필요합니다: PcbPass, FwPass, RfTxPass, SemiAssyPass, BatadcPass")
@@ -47,14 +48,14 @@ def analyze_data(df, date_col_name, jig_col_name):
     
     # 지그(PC) 컬럼에 데이터가 없는 경우 '전체'를 대체 컬럼으로 사용
     used_jig_col_name = jig_col_name
-    if jig_col_name not in df.columns or df[jig_col_name].isnull().all() or df[jig_col_name].nunique() < 2:
+    if jig_col_name not in df_copy.columns or df_copy[jig_col_name].isnull().all() or df_copy[jig_col_name].nunique() < 2:
         used_jig_col_name = '__total_group__'
-        df[used_jig_col_name] = '전체'
+        df_copy[used_jig_col_name] = '전체'
 
     # 지그(PC) 컬럼이 존재하고 데이터가 있는 경우에만 그룹 분석 실행
-    if used_jig_col_name in df.columns and not df[used_jig_col_name].isnull().all():
-        if 'SNumber' in df.columns and date_col_name in df.columns and not df[date_col_name].dt.date.dropna().empty:
-            for jig, group in df.groupby(used_jig_col_name):
+    if used_jig_col_name in df_copy.columns and not df_copy[used_jig_col_name].isnull().all():
+        if 'SNumber' in df_copy.columns and date_col_name in df_copy.columns and not df_copy[date_col_name].dt.date.dropna().empty:
+            for jig, group in df_copy.groupby(used_jig_col_name):
                 # 날짜 열이 datetime 타입인지 확인하고, 아니면 변환
                 if not pd.api.types.is_datetime64_any_dtype(group[date_col_name]):
                     group.loc[:, date_col_name] = pd.to_datetime(group[date_col_name], errors='coerce')
@@ -100,7 +101,7 @@ def analyze_data(df, date_col_name, jig_col_name):
                         'fail': fail_count,
                     }
     
-    all_dates = sorted(list(df[date_col_name].dt.date.dropna().unique()))
+    all_dates = sorted(list(df_copy[date_col_name].dt.date.dropna().unique()))
     
     return summary_data, all_dates, used_jig_col_name
 
@@ -174,13 +175,15 @@ def display_analysis_result(analysis_key, table_name, date_col_name, selected_ji
         st.markdown("#### 상세 내역")
         df_filtered = st.session_state.analysis_results[analysis_key]
         
-        # used_jig_col이 df_filtered에 있는지 확인
-        if used_jig_col not in df_filtered.columns:
+        # used_jig_col이 '__total_group__'인 경우 필터링을 건너뜁니다.
+        if used_jig_col == '__total_group__':
+            jig_filtered_df = df_filtered.copy()
+        elif used_jig_col not in df_filtered.columns:
             st.warning(f"데이터프레임에 '{used_jig_col}' 컬럼이 없어 상세 내역을 표시할 수 없습니다.")
             continue
-            
-        # 현재 지그에 해당하는 데이터만 필터링
-        jig_filtered_df = df_filtered[df_filtered[used_jig_col] == jig].copy()
+        else:
+            # 현재 지그에 해당하는 데이터만 필터링
+            jig_filtered_df = df_filtered[df_filtered[used_jig_col] == jig].copy()
         
         # SNumber가 유효한지 확인
         jig_filtered_df = jig_filtered_df[jig_filtered_df['SNumber'].notna()]
