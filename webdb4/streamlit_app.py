@@ -186,6 +186,9 @@ def display_analysis_result(analysis_key, table_name, date_col_name, selected_ji
             jig_filtered_df = df_filtered[df_filtered[used_jig_col] == jig].copy()
         
         # SNumber가 유효한지 확인
+        if 'SNumber' not in jig_filtered_df.columns:
+            st.warning("'SNumber' 컬럼이 없어 상세 내역을 표시할 수 없습니다.")
+            continue
         jig_filtered_df = jig_filtered_df[jig_filtered_df['SNumber'].notna()]
         
         # PassStatusNorm이 존재하는지 확인
@@ -375,9 +378,14 @@ def main():
                 # 날짜 컬럼을 datetime으로 변환 (파일 로드 시 처리될 수 있으나 안전을 위해 다시 확인)
                 df_to_analyze[f"{date_col_name}_dt"] = pd.to_datetime(df_to_analyze[date_col_name], errors='coerce')
                 
-                unique_pc = df_to_analyze[jig_col_name].dropna().unique()
-                pc_options = ['모든 PC'] + sorted(list(unique_pc))
-                selected_pc = st.selectbox("PC (Jig) 선택", pc_options, key=f"pc_select_{key}")
+                # jig_col_name이 데이터프레임에 있는지 확인
+                if jig_col_name in df_to_analyze.columns:
+                    unique_pc = df_to_analyze[jig_col_name].dropna().unique()
+                    pc_options = ['모든 PC'] + sorted(list(unique_pc))
+                    selected_pc = st.selectbox("PC (Jig) 선택", pc_options, key=f"pc_select_{key}")
+                else:
+                    st.warning(f"'{jig_col_name}' 컬럼이 없어 PC 선택 기능을 사용할 수 없습니다. '모든 PC'로 설정됩니다.")
+                    selected_pc = '모든 PC'
 
                 df_dates = df_to_analyze[f"{date_col_name}_dt"].dt.date.dropna()
                 min_date = df_dates.min() if not df_dates.empty else date.today()
@@ -421,7 +429,7 @@ def main():
                 selected_display_cols = st.multiselect(
                     "표시할 필드를 선택하세요",
                     options=all_cols,
-                    default=[col for col in ['SNumber', 'PcbStartTime', 'PcbPass', 'PcbSleepCurr'] if col in all_cols],
+                    default=[col for col in ['SNumber'] if col in all_cols],
                     key=f"col_select_{key}"
                 )
                 
