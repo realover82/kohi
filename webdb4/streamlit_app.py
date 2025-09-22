@@ -102,6 +102,12 @@ def display_analysis_result(analysis_key, table_name, date_col_name, selected_ji
         st.warning("분석 데이터가 비어 있습니다.")
         return
 
+    # Check if analysis_data is available for the key
+    if st.session_state.analysis_data[analysis_key] is None:
+        st.warning("분석 데이터가 준비되지 않았습니다. '분석 실행' 버튼을 눌러주세요.")
+        return
+
+    # Unpack the tuple safely
     summary_data, all_dates, used_jig_col_name_from_state = st.session_state.analysis_data[analysis_key]
     
     # 실제 사용된 지그 컬럼명을 우선적으로 사용
