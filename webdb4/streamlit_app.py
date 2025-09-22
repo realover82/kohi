@@ -85,28 +85,41 @@ def analyze_data(df, date_col_name, jig_col_name):
                     # 'PassStatusNorm'이 존재하는지 확인
                     if 'PassStatusNorm' not in day_group.columns:
                         continue
-                        
-                    # PassStatusNorm의 O, X 데이터를 활용하여 pass, fail 집계
+                    
+                    # 수정된 집계 로직: 각 테스트별로 집계 (원본 로직과 동일)
+                    # SNumber별로 최종 Pass 여부 결정 (하나라도 O가 있으면 Pass)
                     pass_sns_series = day_group.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
                     pass_sns = pass_sns_series[pass_sns_series].index.tolist()
 
-                    total_test_count = len(day_group['SNumber'].unique())
-                    pass_count = len(pass_sns)
+                    # 각 측정값별 집계 (테스트 횟수 기준)
+                    total_test = len(day_group)  # 전체 테스트 횟수
+                    pass_count = (day_group['PassStatusNorm'] == 'O').sum()  # Pass 테스트 횟수
                     
-                    false_defect_count = len(day_group[(day_group['PassStatusNorm'] == 'X') & (day_group['SNumber'].isin(pass_sns))]['SNumber'].unique())
-                    true_defect_count = len(day_group[(day_group['PassStatusNorm'] == 'X') & (~day_group['SNumber'].isin(pass_sns))]['SNumber'].unique())
+                    # 가성불량: Pass SNumber이지만 현재 테스트는 X인 경우
+                    false_defect_df = day_group[(day_group['PassStatusNorm'] == 'X') & (day_group['SNumber'].isin(pass_sns))]
+                    false_defect_count = len(false_defect_df)
+                    false_defect_sns = false_defect_df['SNumber'].unique().tolist()
                     
-                    # 요청에 따라 'fail' 값 수정
+                    # 진성불량: 아예 Pass가 없는 SNumber의 X 테스트
+                    true_defect_df = day_group[(day_group['PassStatusNorm'] == 'X') & (~day_group['SNumber'].isin(pass_sns))]
+                    true_defect_count = len(true_defect_df)
+                    
+                    # 전체 실패 횟수
                     fail_count = false_defect_count + true_defect_count
+                    
+                    # Pass rate 계산
+                    rate = 100 * pass_count / total_test if total_test > 0 else 0
 
                     if jig not in summary_data:
                         summary_data[jig] = {}
                     summary_data[jig][date_iso] = {
-                        'total_test': total_test_count,
+                        'total_test': total_test,
                         'pass': pass_count,
                         'false_defect': false_defect_count,
                         'true_defect': true_defect_count,
                         'fail': fail_count,
+                        'pass_rate': f"{rate:.1f}%",
+                        'false_defect_sns': false_defect_sns
                     }
     
     all_dates = sorted(list(df_copy[date_col_name].dt.date.dropna().unique()))
@@ -216,23 +229,23 @@ def display_analysis_result(analysis_key, table_name, date_col_name, selected_ji
                 st.warning("PassStatusNorm 컬럼이 없어 상세 내역을 표시할 수 없습니다.")
                 continue
 
-        # PASS 상세 내역
+        # PASS 상세 내역 (SNumber 기준)
         pass_sns = jig_filtered_df.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
         pass_sns = pass_sns[pass_sns].index.tolist()
         with st.expander(f"PASS ({len(pass_sns)}건)", expanded=False):
             st.text("\n".join(pass_sns))
         
-        # 가성불량 (False Defect) 상세 내역
+        # 가성불량 (False Defect) 상세 내역 (SNumber 기준)
         false_defect_sns = jig_filtered_df[(jig_filtered_df['PassStatusNorm'] == 'X') & (jig_filtered_df['SNumber'].isin(pass_sns))]['SNumber'].unique().tolist()
         with st.expander(f"가성불량 ({len(false_defect_sns)}건)", expanded=False):
             st.text("\n".join(false_defect_sns))
             
-        # 진성불량 (True Defect) 상세 내역
+        # 진성불량 (True Defect) 상세 내역 (SNumber 기준)
         true_defect_sns = jig_filtered_df[(jig_filtered_df['PassStatusNorm'] == 'X') & (~jig_filtered_df['SNumber'].isin(pass_sns))]['SNumber'].unique().tolist()
         with st.expander(f"진성불량 ({len(true_defect_sns)}건)", expanded=False):
             st.text("\n".join(true_defect_sns))
 
-        # FAIL 상세 내역
+        # FAIL 상세 내역 (SNumber 기준)
         all_snumbers = jig_filtered_df['SNumber'].unique().tolist()
         all_fail_sns = list(set(all_snumbers) - set(pass_sns))
         with st.expander(f"FAIL ({len(all_fail_sns)}건)", expanded=False):
