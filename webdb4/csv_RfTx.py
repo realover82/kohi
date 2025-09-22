@@ -23,7 +23,7 @@ def read_csv_with_dynamic_header_for_RfTx(uploaded_file):
     """Fw 데이터에 맞는 키워드로 헤더를 찾아 DataFrame을 로드하는 함수"""
     try:
         file_content = io.BytesIO(uploaded_file.getvalue())
-        df_temp = pd.read_csv(file_content, header=None, nrows=100)
+        df_temp = pd.read_csv(file_content, header=None, nrows=100, encoding='utf-8')
         
         # 'Fw' 관련 필드명으로 키워드 수정
         keywords = ['SNumber', 'RfTxStamp', 'RfTxPC', 'RfTxPass']
@@ -38,7 +38,7 @@ def read_csv_with_dynamic_header_for_RfTx(uploaded_file):
         
         if header_row is not None:
             file_content.seek(0)
-            df = pd.read_csv(file_content, header=header_row)
+            df = pd.read_csv(file_content, header=header_row, encoding='utf-8')
             return df
         else:
             return None
@@ -56,8 +56,12 @@ def analyze_RfTx_data(df):
     df['PassStatusNorm'] = df['RfTxPass'].fillna('').astype(str).str.strip().str.upper()
 
     summary_data = {}
+    
+    # RfTxPC 열이 없는 경우를 대비
+    if 'RfTxPC' not in df.columns:
+        df['RfTxPC'] = 'DefaultJig'
 
-    # 'FwPC'를 기준으로 그룹화
+    # 'RfTxPC'를 기준으로 그룹화
     for jig, group in df.groupby('RfTxPC'):
         if group['RfTxStamp'].dt.date.dropna().empty:
             continue
@@ -72,18 +76,29 @@ def analyze_RfTx_data(df):
             pass_sns = pass_sns_series[pass_sns_series].index.tolist()
 
             pass_count = (day_group['PassStatusNorm'] == 'O').sum()
+            
             false_defect_df = day_group[(day_group['PassStatusNorm'] == 'X') & (day_group['SNumber'].isin(pass_sns))]
             false_defect_count = false_defect_df.shape[0]
             false_defect_sns = false_defect_df['SNumber'].unique().tolist()
+            
             true_defect_df = day_group[(day_group['PassStatusNorm'] == 'X') & (~day_group['SNumber'].isin(pass_sns))]
             true_defect_count = true_defect_df.shape[0]
+            # 수정: 진성불량 상세 목록 추가
+            true_defect_sns = true_defect_df['SNumber'].unique().tolist()
 
             total_test = len(day_group)
             fail_count = false_defect_count + true_defect_count
+            
+            # 수정: FAIL 상세 목록 추가
+            fail_df = day_group[day_group['PassStatusNorm'] == 'X']
+            fail_sns = fail_df['SNumber'].unique().tolist()
+
             rate = 100 * pass_count / total_test if total_test > 0 else 0
 
             if jig not in summary_data:
                 summary_data[jig] = {}
+            
+            # 수정: 모든 상세 목록을 summary_data에 포함
             summary_data[jig][date_iso] = {
                 'total_test': total_test,
                 'pass': pass_count,
@@ -91,7 +106,10 @@ def analyze_RfTx_data(df):
                 'true_defect': true_defect_count,
                 'fail': fail_count,
                 'pass_rate': f"{rate:.1f}%",
-                'false_defect_sns': false_defect_sns
+                'pass_sns': pass_sns,
+                'false_defect_sns': false_defect_sns,
+                'true_defect_sns': true_defect_sns,
+                'fail_sns': fail_sns
             }
     
     all_dates = sorted(list(df['RfTxStamp'].dt.date.dropna().unique()))

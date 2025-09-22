@@ -131,22 +131,13 @@ def analyze_Semi_data(df):
                 
                 true_defect_df = day_group[(day_group['PassStatusNorm'] == 'X') & (~day_group['SNumber'].isin(pass_sns))]
                 true_defect_count = true_defect_df.shape[0]
-                # 수정: 진성불량 상세 목록 추가
-                true_defect_sns = true_defect_df['SNumber'].unique().tolist()
                 
                 total_test = len(day_group)
                 fail_count = false_defect_count + true_defect_count
-                
-                # 수정: FAIL 상세 목록 추가
-                fail_df = day_group[day_group['PassStatusNorm'] == 'X']
-                fail_sns = fail_df['SNumber'].unique().tolist()
-
                 rate = 100 * pass_count / total_test if total_test > 0 else 0
                 
                 if jig not in summary_data:
                     summary_data[jig] = {}
-
-                # 수정: 모든 상세 목록을 summary_data에 포함
                 summary_data[jig][date_iso] = {
                     'total_test': total_test,
                     'pass': pass_count,
@@ -154,10 +145,7 @@ def analyze_Semi_data(df):
                     'true_defect': true_defect_count,
                     'fail': fail_count,
                     'pass_rate': f"{rate:.1f}%",
-                    'pass_sns': pass_sns,
-                    'false_defect_sns': false_defect_sns,
-                    'true_defect_sns': true_defect_sns,
-                    'fail_sns': fail_sns
+                    'false_defect_sns': false_defect_sns
                 }
         
         all_dates = sorted(list(df_valid['SemiAssyStartTime'].dt.date.dropna().unique()))
