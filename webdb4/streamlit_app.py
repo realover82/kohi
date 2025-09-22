@@ -27,19 +27,26 @@ def analyze_data(df, date_col_name, jig_col_name):
 
     # PassStatusNorm 컬럼 생성
     df_copy = df.copy()
-    df_copy['PassStatusNorm'] = ""
+    
     # 다양한 Pass 컬럼에 대해 PassStatusNorm 생성
+    pass_col_found = False
     if 'PcbPass' in df_copy.columns:
         df_copy['PassStatusNorm'] = df_copy['PcbPass'].fillna('').astype(str).str.strip().str.upper()
+        pass_col_found = True
     elif 'FwPass' in df_copy.columns:
         df_copy['PassStatusNorm'] = df_copy['FwPass'].fillna('').astype(str).str.strip().str.upper()
+        pass_col_found = True
     elif 'RfTxPass' in df_copy.columns:
         df_copy['PassStatusNorm'] = df_copy['RfTxPass'].fillna('').astype(str).str.strip().str.upper()
+        pass_col_found = True
     elif 'SemiAssyPass' in df_copy.columns:
         df_copy['PassStatusNorm'] = df_copy['SemiAssyPass'].fillna('').astype(str).str.strip().str.upper()
+        pass_col_found = True
     elif 'BatadcPass' in df_copy.columns:
         df_copy['PassStatusNorm'] = df_copy['BatadcPass'].fillna('').astype(str).str.strip().str.upper()
-    else:
+        pass_col_found = True
+    
+    if not pass_col_found:
         # Pass 컬럼이 없는 경우, 분석을 계속할 수 없으므로 빈 결과를 반환
         st.warning("Pass 상태를 나타내는 컬럼이 없습니다. 다음 컬럼 중 하나가 필요합니다: PcbPass, FwPass, RfTxPass, SemiAssyPass, BatadcPass")
         return {}, [], jig_col_name
@@ -79,6 +86,7 @@ def analyze_data(df, date_col_name, jig_col_name):
                     if 'PassStatusNorm' not in day_group.columns:
                         continue
                         
+                    # PassStatusNorm의 O, X 데이터를 활용하여 pass, fail 집계
                     pass_sns_series = day_group.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
                     pass_sns = pass_sns_series[pass_sns_series].index.tolist()
 
@@ -192,10 +200,22 @@ def display_analysis_result(analysis_key, table_name, date_col_name, selected_ji
         jig_filtered_df = jig_filtered_df[jig_filtered_df['SNumber'].notna()]
         
         # PassStatusNorm이 존재하는지 확인
+        # analyze_data에서 생성된 PassStatusNorm이 원본 analysis_results에는 없으므로, 여기서 다시 생성
         if 'PassStatusNorm' not in jig_filtered_df.columns:
-            st.warning("PassStatusNorm 컬럼이 없어 상세 내역을 표시할 수 없습니다.")
-            continue
-            
+            if 'PcbPass' in jig_filtered_df.columns:
+                jig_filtered_df['PassStatusNorm'] = jig_filtered_df['PcbPass'].fillna('').astype(str).str.strip().str.upper()
+            elif 'FwPass' in jig_filtered_df.columns:
+                jig_filtered_df['PassStatusNorm'] = jig_filtered_df['FwPass'].fillna('').astype(str).str.strip().str.upper()
+            elif 'RfTxPass' in jig_filtered_df.columns:
+                jig_filtered_df['PassStatusNorm'] = jig_filtered_df['RfTxPass'].fillna('').astype(str).str.strip().str.upper()
+            elif 'SemiAssyPass' in jig_filtered_df.columns:
+                jig_filtered_df['PassStatusNorm'] = jig_filtered_df['SemiAssyPass'].fillna('').astype(str).str.strip().str.upper()
+            elif 'BatadcPass' in jig_filtered_df.columns:
+                jig_filtered_df['PassStatusNorm'] = jig_filtered_df['BatadcPass'].fillna('').astype(str).str.strip().str.upper()
+            else:
+                st.warning("PassStatusNorm 컬럼이 없어 상세 내역을 표시할 수 없습니다.")
+                continue
+
         # PASS 상세 내역
         pass_sns = jig_filtered_df.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
         pass_sns = pass_sns[pass_sns].index.tolist()
