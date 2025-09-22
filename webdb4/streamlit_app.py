@@ -85,24 +85,26 @@ def analyze_data(df, date_col_name, jig_col_name):
                     # 'PassStatusNorm'이 존재하는지 확인
                     if 'PassStatusNorm' not in day_group.columns:
                         continue
-                    
-                    # 수정된 집계 로직: 각 테스트별로 집계 (원본 로직과 동일)
-                    # SNumber별로 최종 Pass 여부 결정 (하나라도 O가 있으면 Pass)
-                    pass_sns_series = day_group.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
-                    pass_sns = pass_sns_series[pass_sns_series].index.tolist()
-
                     # 각 측정값별 집계 (테스트 횟수 기준)
                     total_test = len(day_group)  # 전체 테스트 횟수
                     pass_count = (day_group['PassStatusNorm'] == 'O').sum()  # Pass 테스트 횟수
                     
-                    # 가성불량: Pass SNumber이지만 현재 테스트는 X인 경우
+                    # 수정된 집계 로직: 각 테스트별로 집계 (원본 로직과 동일)
+                    # SNumber별로 최종 Pass 여부 결정 (하나라도 O가 있으면 Pass)
+                    # SN별 PASS 여부
+                    pass_sns_series = day_group.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
+                    pass_sns = pass_sns_series[pass_sns_series].index.tolist()
+
+                    
+                    # 가성불량: PASS SN인데 X가 나온 경우
                     false_defect_df = day_group[(day_group['PassStatusNorm'] == 'X') & (day_group['SNumber'].isin(pass_sns))]
                     false_defect_count = len(false_defect_df)
                     false_defect_sns = false_defect_df['SNumber'].unique().tolist()
-                    
-                    # 진성불량: 아예 Pass가 없는 SNumber의 X 테스트
+
+                    # 진성불량: PASS가 한 번도 없고 전부 X인 SN
                     true_defect_df = day_group[(day_group['PassStatusNorm'] == 'X') & (~day_group['SNumber'].isin(pass_sns))]
                     true_defect_count = len(true_defect_df)
+                    true_defect_sns = true_defect_df['SNumber'].unique().tolist()
                     
                     # 전체 실패 횟수
                     fail_count = false_defect_count + true_defect_count
