@@ -75,21 +75,14 @@ def read_csv_with_dynamic_header_for_Semi(uploaded_file):
 def analyze_Semi_data(df):
     """SemiAssy 데이터의 분석 로직을 담고 있는 함수"""
     try:
-        # 이전에 추가된 필수 컬럼 검사 로직은 그대로 유지
         required_columns = ['SNumber', 'SemiAssyStartTime', 'SemiAssyPass']
         missing_columns = [col for col in required_columns if col not in df.columns]
         
         if missing_columns:
             raise ValueError(f"필수 컬럼이 없습니다: {missing_columns}")
         
-        # --- 수정된 부분: pd.to_datetime() 전에 문자열 정리 함수를 적용합니다. ---
-        # SemiAssyStartTime 컬럼에만 clean_string_format 적용
         df['SemiAssyStartTime'] = df['SemiAssyStartTime'].apply(clean_string_format)
-        
-        # SemiAssyStartTime 열을 datetime 형식으로 변환
         df['SemiAssyStartTime'] = pd.to_datetime(df['SemiAssyStartTime'], format='%Y%m%d%H%M%S', errors='coerce')
-        
-        # SemiAssyPass 컬럼에도 정리 함수 적용 후 PassStatusNorm 생성
         df['PassStatusNorm'] = df['SemiAssyPass'].apply(clean_string_format).fillna('').astype(str).str.strip().str.upper()
 
         df_valid = df[df['SemiAssyStartTime'].notna()].copy()
@@ -120,33 +113,30 @@ def analyze_Semi_data(df):
                 
                 date_iso = pd.to_datetime(d).strftime("%Y-%m-%d")
                 
-                pass_sns_series = day_group.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
-                pass_sns = pass_sns_series[pass_sns_series].index.tolist()
-                
-                pass_count = (day_group['PassStatusNorm'] == 'O').sum()
-                
-                false_defect_df = day_group[(day_group['PassStatusNorm'] == 'X') & (day_group['SNumber'].isin(pass_sns))]
-                false_defect_count = false_defect_df.shape[0]
-                false_defect_sns = false_defect_df['SNumber'].unique().tolist()
-                
-                true_defect_df = day_group[(day_group['PassStatusNorm'] == 'X') & (~day_group['SNumber'].isin(pass_sns))]
-                true_defect_count = true_defect_df.shape[0]
-                # 수정: 진성불량 상세 목록 추가
-                true_defect_sns = true_defect_df['SNumber'].unique().tolist()
-                
-                total_test = len(day_group)
-                fail_count = false_defect_count + true_defect_count
-                
-                # 수정: FAIL 상세 목록 추가
+                pass_df = day_group[day_group['PassStatusNorm'] == 'O']
                 fail_df = day_group[day_group['PassStatusNorm'] == 'X']
-                fail_sns = fail_df['SNumber'].unique().tolist()
+                
+                ever_passed_sns = day_group[day_group['PassStatusNorm'] == 'O']['SNumber'].unique()
 
+                false_defect_df = fail_df[fail_df['SNumber'].isin(ever_passed_sns)]
+                true_defect_df = fail_df[~fail_df['SNumber'].isin(ever_passed_sns)]
+
+                pass_sns = pass_df['SNumber'].unique().tolist()
+                false_defect_sns = false_defect_df['SNumber'].unique().tolist()
+                true_defect_sns = true_defect_df['SNumber'].unique().tolist()
+                fail_sns = fail_df['SNumber'].unique().tolist()
+                
+                pass_count = len(pass_df)
+                false_defect_count = len(false_defect_df)
+                true_defect_count = len(true_defect_df)
+                fail_count = len(fail_df)
+                total_test = len(day_group)
                 rate = 100 * pass_count / total_test if total_test > 0 else 0
                 
                 if jig not in summary_data:
                     summary_data[jig] = {}
-
-                # 수정: 모든 상세 목록을 summary_data에 포함
+                
+                # ★★★ 수정된 부분: 모든 상세 목록 및 고유 SN 건수를 summary_data에 포함 ★★★
                 summary_data[jig][date_iso] = {
                     'total_test': total_test,
                     'pass': pass_count,
@@ -154,10 +144,16 @@ def analyze_Semi_data(df):
                     'true_defect': true_defect_count,
                     'fail': fail_count,
                     'pass_rate': f"{rate:.1f}%",
+                    
                     'pass_sns': pass_sns,
                     'false_defect_sns': false_defect_sns,
                     'true_defect_sns': true_defect_sns,
-                    'fail_sns': fail_sns
+                    'fail_sns': fail_sns,
+
+                    'pass_unique_count': len(pass_sns),
+                    'false_defect_unique_count': len(false_defect_sns),
+                    'true_defect_unique_count': len(true_defect_sns),
+                    'fail_unique_count': len(fail_sns)
                 }
         
         all_dates = sorted(list(df_valid['SemiAssyStartTime'].dt.date.dropna().unique()))
