@@ -159,7 +159,7 @@ def display_analysis_result(analysis_key, file_name, jig_col_name):
                     # '상세 내역'을 표시하는 루프 안쪽
                     unique_count = data_point.get(f'{cat}_unique_count', 0)
                     expander_title = f"{label} - {count}건 (고유 SN: {unique_count}건)"
-                    with st.expander(f"{label} - {count}건", expanded=False):
+                    with st.expander(expander_title, expanded=False):
                         if sns_list:
                             st.text("\n".join(sns_list))
                         else:
