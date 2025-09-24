@@ -17,37 +17,37 @@ def clean_string_format(value):
         return value[2:-1]
     return value
 
-# read_csv_with_dynamic_header 함수는 Streamlit 앱에서 이미 정의되어 있으므로 필요 없습니다.
-# 하지만 파일 로드 키워드만 Fw 데이터에 맞게 변경하여 함수를 하나로 통합합니다.
 def read_csv_with_dynamic_header_for_RfTx(uploaded_file):
-    """Fw 데이터에 맞는 키워드로 헤더를 찾아 DataFrame을 로드하는 함수"""
+    """RfTx 데이터에 맞는 키워드로 헤더를 찾아 DataFrame을 로드하는 함수"""
     try:
         file_content = io.BytesIO(uploaded_file.getvalue())
-        df_temp = pd.read_csv(file_content, header=None, nrows=100, encoding='utf-8')
-        
-        # 'Fw' 관련 필드명으로 키워드 수정
-        keywords = ['SNumber', 'RfTxStamp', 'RfTxPC', 'RfTxPass']
-        
-        header_row = None
-        for i, row in df_temp.iterrows():
-            row_values = [str(x).strip() for x in row.values if pd.notna(x)]
-            
-            if all(keyword in row_values for keyword in keywords):
-                header_row = i
-                break
-        
-        if header_row is not None:
-            file_content.seek(0)
-            df = pd.read_csv(file_content, header=header_row, encoding='utf-8')
-            return df
-        else:
-            return None
+        # 다양한 인코딩 시도
+        encodings = ['utf-8', 'utf-8-sig', 'cp949', 'euc-kr', 'latin1']
+        df = None
+        for encoding in encodings:
+            try:
+                file_content.seek(0)
+                df_temp = pd.read_csv(file_content, header=None, nrows=100, encoding=encoding)
+                keywords = ['SNumber', 'RfTxStamp', 'RfTxPC', 'RfTxPass']
+                header_row = None
+                for i, row in df_temp.iterrows():
+                    row_values = [str(x).strip() for x in row.values if pd.notna(x)]
+                    if all(keyword in row_values for keyword in keywords):
+                        header_row = i
+                        break
+                
+                if header_row is not None:
+                    file_content.seek(0)
+                    df = pd.read_csv(file_content, header=header_row, encoding=encoding)
+                    return df
+            except Exception:
+                continue
+        return None
     except Exception as e:
         return None
 
-# B파일 분석 로직 함수 (Fw 데이터를 분석하도록 수정)
 def analyze_RfTx_data(df):
-    """Fw 데이터의 분석 로직을 담고 있는 함수"""
+    """RfTx 데이터의 분석 로직을 담고 있는 함수"""
     # 데이터 전처리
     for col in df.columns:
         df[col] = df[col].apply(clean_string_format)
@@ -57,13 +57,13 @@ def analyze_RfTx_data(df):
 
     summary_data = {}
     
-    # RfTxPC 열이 없는 경우를 대비
     if 'RfTxPC' not in df.columns:
         df['RfTxPC'] = 'DefaultJig'
 
-    # 'RfTxPC'를 기준으로 그룹화
     for jig, group in df.groupby('RfTxPC'):
-        if group['RfTxStamp'].dt.date.dropna().empty:
+        # 유효한 날짜 데이터가 없는 그룹은 건너뜁니다.
+        group = group.dropna(subset=['RfTxStamp'])
+        if group.empty:
             continue
         
         for d, day_group in group.groupby(group['RfTxStamp'].dt.date):
@@ -72,33 +72,32 @@ def analyze_RfTx_data(df):
             
             date_iso = pd.to_datetime(d).strftime("%Y-%m-%d")
 
-            pass_sns_series = day_group.groupby('SNumber')['PassStatusNorm'].apply(lambda x: 'O' in x.tolist())
-            pass_sns = pass_sns_series[pass_sns_series].index.tolist()
+            # 'O'가 한 번이라도 있었던 SNumber 목록 (해당 일자 기준)
+            ever_passed_sns = day_group[day_group['PassStatusNorm'] == 'O']['SNumber'].unique()
 
-            pass_count = (day_group['PassStatusNorm'] == 'O').sum()
-            
-            false_defect_df = day_group[(day_group['PassStatusNorm'] == 'X') & (day_group['SNumber'].isin(pass_sns))]
-            false_defect_count = false_defect_df.shape[0]
-            false_defect_sns = false_defect_df['SNumber'].unique().tolist()
-            
-            true_defect_df = day_group[(day_group['PassStatusNorm'] == 'X') & (~day_group['SNumber'].isin(pass_sns))]
-            true_defect_count = true_defect_df.shape[0]
-            # 수정: 진성불량 상세 목록 추가
-            true_defect_sns = true_defect_df['SNumber'].unique().tolist()
-
-            total_test = len(day_group)
-            fail_count = false_defect_count + true_defect_count
-            
-            # 수정: FAIL 상세 목록 추가
+            # 각 카테고리별 데이터프레임 필터링
+            pass_df = day_group[day_group['PassStatusNorm'] == 'O']
             fail_df = day_group[day_group['PassStatusNorm'] == 'X']
+            false_defect_df = fail_df[fail_df['SNumber'].isin(ever_passed_sns)]
+            true_defect_df = fail_df[~fail_df['SNumber'].isin(ever_passed_sns)]
+
+            # 각 카테고리별 상세 목록 (고유 SN) 생성
+            pass_sns = pass_df['SNumber'].unique().tolist()
+            false_defect_sns = false_defect_df['SNumber'].unique().tolist()
+            true_defect_sns = true_defect_df['SNumber'].unique().tolist()
             fail_sns = fail_df['SNumber'].unique().tolist()
 
+            # 각 항목별 건수 (테스트 횟수)
+            pass_count = len(pass_df)
+            false_defect_count = len(false_defect_df)
+            true_defect_count = len(true_defect_df)
+            fail_count = len(fail_df)
+            total_test = len(day_group)
             rate = 100 * pass_count / total_test if total_test > 0 else 0
 
             if jig not in summary_data:
                 summary_data[jig] = {}
             
-            # 수정: 모든 상세 목록을 summary_data에 포함
             summary_data[jig][date_iso] = {
                 'total_test': total_test,
                 'pass': pass_count,
@@ -107,14 +106,11 @@ def analyze_RfTx_data(df):
                 'fail': fail_count,
                 'pass_rate': f"{rate:.1f}%",
                 
-                # 상세 목록 (고유 SN)
                 'pass_sns': pass_sns,
                 'false_defect_sns': false_defect_sns,
                 'true_defect_sns': true_defect_sns,
-                'fail_sns': fail_sns
+                'fail_sns': fail_sns,
 
-                
-                # ★★★ 수정/추가된 부분: 고유 SN 건수 계산 및 추가 ★★★
                 'pass_unique_count': len(pass_sns),
                 'false_defect_unique_count': len(false_defect_sns),
                 'true_defect_unique_count': len(true_defect_sns),
