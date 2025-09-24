@@ -106,10 +106,19 @@ def analyze_RfTx_data(df):
                 'true_defect': true_defect_count,
                 'fail': fail_count,
                 'pass_rate': f"{rate:.1f}%",
+                
+                # 상세 목록 (고유 SN)
                 'pass_sns': pass_sns,
                 'false_defect_sns': false_defect_sns,
                 'true_defect_sns': true_defect_sns,
                 'fail_sns': fail_sns
+
+                
+                # ★★★ 수정/추가된 부분: 고유 SN 건수 계산 및 추가 ★★★
+                'pass_unique_count': len(pass_sns),
+                'false_defect_unique_count': len(false_defect_sns),
+                'true_defect_unique_count': len(true_defect_sns),
+                'fail_unique_count': len(fail_sns)
             }
     
     all_dates = sorted(list(df['RfTxStamp'].dt.date.dropna().unique()))
